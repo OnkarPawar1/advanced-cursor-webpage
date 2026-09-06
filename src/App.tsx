@@ -694,10 +694,13 @@ const AudioVisualMixer = () => {
   const drawCursorFX = (ctx, w, h, now) => {
     const s = stateRefs.current;
     const pointer = pointerRef.current;
-    if (!s.showAnimatedCursor || !pointer.visible) return;
+    // For focus-wide: keep rendering even if cursor left the canvas
+    const isFocusWide = s.cursorStyle === 'focus-wide';
+    if (!s.showAnimatedCursor || (!pointer.visible && !isFocusWide)) return;
 
     const idleMs = now - pointer.lastMove;
-    const idleAlpha = idleMs > 2600 ? Math.max(0, 1 - ((idleMs - 2600) / 700)) : 1;
+    // focus-wide: never fade — zoom stays frozen at last position when cursor idles or leaves
+    const idleAlpha = isFocusWide ? 1 : (idleMs > 2600 ? Math.max(0, 1 - ((idleMs - 2600) / 700)) : 1);
     if (idleAlpha <= 0) return;
 
     const x = pointer.x;
@@ -2057,7 +2060,7 @@ const AudioVisualMixer = () => {
                 onPointerUp={finishCanvasStroke}
                 onPointerCancel={finishCanvasStroke}
                 onPointerEnter={(e) => { handleCanvasPointerMove(e); pointerRef.current.visible = true; }}
-                onPointerLeave={() => { if (!pointerRef.current.down) pointerRef.current.visible = false; }}
+                onPointerLeave={() => { if (!pointerRef.current.down && cursorStyle !== 'focus-wide') pointerRef.current.visible = false; }}
                 className="w-full h-full object-contain select-none"
                 style={{ cursor: showAnimatedCursor ? 'none' : (interactionMode === 'pen' || interactionMode === 'highlight' || interactionMode === 'zoom' ? 'crosshair' : 'default'), touchAction: 'none' }}
              />
