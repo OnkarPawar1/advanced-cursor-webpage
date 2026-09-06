@@ -76,6 +76,7 @@ const AudioVisualMixer = () => {
   const clickBurstsRef = useRef([]);
   const lastTrailSampleRef = useRef(0);
   const overviewCanvasRef = useRef(null);
+  const offscreenCanvasRef = useRef(null); // snapshot canvas for focus-wide zoom
 
   const TRANSITION_DURATION = 1.5; 
 
@@ -719,83 +720,61 @@ const AudioVisualMixer = () => {
       ctx.restore();
     }
 
-    // 16:9 Wide Spotlight — rectangular window with continuous animations.
+    // 16:9 Wide Spotlight — TRUE MAGNIFYING GLASS: zooms the region under cursor to fill the full canvas.
     if (s.cursorStyle === 'focus-wide') {
       const aspect = 16 / 9;
-      // Window size scales with cursorSize; clamp so it fits the canvas
-      const winH = Math.min(h * 0.85, size * 8.2);
-      const winW = Math.min(w * 0.95, winH * aspect);
-      // Center window on cursor, clamped to canvas edges
-      const wx = Math.max(0, Math.min(w - winW, x - winW / 2));
-      const wy = Math.max(0, Math.min(h - winH, y - winH / 2));
+      // srcH controls how much of the canvas is captured (smaller = more zoom)
+      // cursorSize slider: small size = high zoom, large size = wide view
+      const srcH = Math.max(90, Math.min(h, size * 8.2));
+      const srcW = Math.min(w, srcH * aspect);
+      // Centre source region on cursor, clamped so we never read outside canvas
+      const srcX = Math.max(0, Math.min(w - srcW, x - srcW / 2));
+      const srcY = Math.max(0, Math.min(h - srcH, y - srcH / 2));
+
+      const oc = offscreenCanvasRef.current;
+      if (oc) {
+        // Draw the zoomed region from the pre-FX snapshot to fill the ENTIRE canvas
+        ctx.save();
+        ctx.globalAlpha = idleAlpha;
+        ctx.drawImage(oc, srcX, srcY, srcW, srcH, 0, 0, w, h);
+        ctx.restore();
+      }
 
       const t = now * 0.001; // seconds
+      const bInset = 5; // inset so border strokes are visible
 
-      // ── 1. Dark overlay everywhere OUTSIDE the 16:9 window ──
-      ctx.save();
-      ctx.globalAlpha = 0.80 * idleAlpha;
-      ctx.fillStyle = '#000';
-      // Top strip
-      ctx.fillRect(0, 0, w, wy);
-      // Bottom strip
-      ctx.fillRect(0, wy + winH, w, h - (wy + winH));
-      // Left strip
-      ctx.fillRect(0, wy, wx, winH);
-      // Right strip
-      ctx.fillRect(wx + winW, wy, w - (wx + winW), winH);
-      ctx.restore();
-
-      // ── 2. Subtle inner vignette (edges of the window fade slightly) ──
-      ctx.save();
-      const vigW = Math.min(winW * 0.22, 120);
-      const vigH = Math.min(winH * 0.22, 80);
-      ['left','right','top','bottom'].forEach(edge => {
-        let gx0, gy0, gx1, gy1, rx, ry, rw, rh;
-        if (edge === 'left')   { gx0=wx; gy0=wy; gx1=wx+vigW; gy1=wy; rx=wx; ry=wy; rw=vigW; rh=winH; }
-        if (edge === 'right')  { gx0=wx+winW; gy0=wy; gx1=wx+winW-vigW; gy1=wy; rx=wx+winW-vigW; ry=wy; rw=vigW; rh=winH; }
-        if (edge === 'top')    { gx0=wx; gy0=wy; gx1=wx; gy1=wy+vigH; rx=wx; ry=wy; rw=winW; rh=vigH; }
-        if (edge === 'bottom') { gx0=wx; gy0=wy+winH; gx1=wx; gy1=wy+winH-vigH; rx=wx; ry=wy+winH-vigH; rw=winW; rh=vigH; }
-        const vg = ctx.createLinearGradient(gx0, gy0, gx1, gy1);
-        vg.addColorStop(0, `rgba(0,0,0,${0.35 * idleAlpha})`);
-        vg.addColorStop(1, 'rgba(0,0,0,0)');
-        ctx.fillStyle = vg;
-        ctx.fillRect(rx, ry, rw, rh);
-      });
-      ctx.restore();
-
-      // ── 3. Breathing glow border ──
+      // ── 1. Breathing glow border around the full canvas ──
       const borderPulse = 0.55 + Math.sin(t * 2.6) * 0.45;
       ctx.save();
       ctx.strokeStyle = accent;
-      ctx.lineWidth = 3.5;
+      ctx.lineWidth = 4;
       ctx.shadowColor = accent;
-      ctx.shadowBlur = 26 * borderPulse * intensity;
-      ctx.globalAlpha = idleAlpha * (0.75 + borderPulse * 0.25);
-      ctx.strokeRect(wx, wy, winW, winH);
-      // Second faint border slightly inside
-      ctx.globalAlpha = idleAlpha * 0.12;
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 1.2;
+      ctx.shadowBlur = 32 * borderPulse * intensity;
+      ctx.globalAlpha = idleAlpha * (0.72 + borderPulse * 0.28);
+      ctx.strokeRect(bInset, bInset, w - bInset * 2, h - bInset * 2);
+      // Thin white inner edge
+      ctx.globalAlpha = idleAlpha * 0.10;
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 1.5;
       ctx.shadowBlur = 0;
-      ctx.strokeRect(wx + 2.5, wy + 2.5, winW - 5, winH - 5);
+      ctx.strokeRect(bInset + 4, bInset + 4, w - (bInset + 4) * 2, h - (bInset + 4) * 2);
       ctx.restore();
 
-      // ── 4. Animated corner L-brackets ──
-      const blenRaw = Math.min(winW, winH) * 0.11;
+      // ── 2. Animated L-corner brackets ──
       const bPulse = 0.8 + Math.sin(t * 3.2) * 0.2;
-      const blen = blenRaw * bPulse;
+      const blen = Math.min(w, h) * 0.07 * bPulse;
       ctx.save();
       ctx.strokeStyle = accent;
-      ctx.lineWidth = 4;
+      ctx.lineWidth = 5;
       ctx.lineCap = 'square';
       ctx.shadowColor = accent;
-      ctx.shadowBlur = 18 * bPulse * intensity;
+      ctx.shadowBlur = 22 * bPulse * intensity;
       ctx.globalAlpha = idleAlpha;
       [
-        [wx,        wy,        1,  1],
-        [wx+winW,   wy,       -1,  1],
-        [wx,        wy+winH,   1, -1],
-        [wx+winW,   wy+winH,  -1, -1],
+        [bInset,     bInset,     1,  1],
+        [w-bInset,   bInset,    -1,  1],
+        [bInset,     h-bInset,   1, -1],
+        [w-bInset,   h-bInset,  -1, -1],
       ].forEach(([cx2, cy2, dx, dy]) => {
         ctx.beginPath();
         ctx.moveTo(cx2 + dx * blen, cy2);
@@ -805,49 +784,60 @@ const AudioVisualMixer = () => {
       });
       ctx.restore();
 
-      // ── 5. Horizontal scan line sweeping through the window ──
-      const scanRaw = (t * 55) % winH; // ~3.5 s per sweep
-      const scanY = wy + scanRaw;
-      if (scanY >= wy && scanY <= wy + winH) {
-        ctx.save();
-        ctx.globalAlpha = idleAlpha * 0.55;
-        const sg = ctx.createLinearGradient(wx, scanY - 14, wx, scanY + 14);
-        sg.addColorStop(0, 'rgba(103,232,249,0)');
-        sg.addColorStop(0.45, `rgba(103,232,249,0.42)`);
-        sg.addColorStop(0.5, 'rgba(255,255,255,0.55)');
-        sg.addColorStop(0.55, `rgba(103,232,249,0.42)`);
-        sg.addColorStop(1, 'rgba(103,232,249,0)');
-        ctx.fillStyle = sg;
-        ctx.fillRect(wx, scanY - 14, winW, 28);
-        ctx.restore();
-      }
-
-      // ── 6. Diagonal shimmer wipe (slower, wide sweep) ──
-      const shimmerX = wx - winW + ((t * 38) % (winW * 2));
+      // ── 3. Horizontal scan line sweeping the full height ──
+      const scanY = (t * 80) % h;
       ctx.save();
-      ctx.beginPath();
-      ctx.rect(wx, wy, winW, winH);
-      ctx.clip();
-      ctx.globalAlpha = idleAlpha * 0.10;
-      const shimG = ctx.createLinearGradient(shimmerX, wy, shimmerX + winW * 0.45, wy + winH);
-      shimG.addColorStop(0, 'rgba(255,255,255,0)');
-      shimG.addColorStop(0.4, 'rgba(255,255,255,0.6)');
-      shimG.addColorStop(0.6, 'rgba(255,255,255,0.6)');
-      shimG.addColorStop(1, 'rgba(255,255,255,0)');
-      ctx.fillStyle = shimG;
-      ctx.fillRect(shimmerX - 20, wy, winW * 0.5, winH);
+      ctx.globalAlpha = idleAlpha * 0.42;
+      const sg = ctx.createLinearGradient(0, scanY - 14, 0, scanY + 14);
+      sg.addColorStop(0, 'rgba(103,232,249,0)');
+      sg.addColorStop(0.45, 'rgba(103,232,249,0.4)');
+      sg.addColorStop(0.5, 'rgba(255,255,255,0.5)');
+      sg.addColorStop(0.55, 'rgba(103,232,249,0.4)');
+      sg.addColorStop(1, 'rgba(103,232,249,0)');
+      ctx.fillStyle = sg;
+      ctx.fillRect(0, scanY - 14, w, 28);
       ctx.restore();
 
-      // ── 7. Record indicator dot (top-left badge) ──
-      const recAlpha = 0.7 + Math.sin(t * 4.5) * 0.3; // blinking
+      // ── 4. Diagonal shimmer wipe ──
+      const shimX = -w + ((t * 50) % (w * 2));
       ctx.save();
-      ctx.globalAlpha = idleAlpha * recAlpha;
-      ctx.shadowColor = '#ff4444';
-      ctx.shadowBlur = 10;
-      ctx.fillStyle = '#ff4444';
+      ctx.globalAlpha = idleAlpha * 0.07;
+      const shG = ctx.createLinearGradient(shimX, 0, shimX + w * 0.4, h);
+      shG.addColorStop(0, 'rgba(255,255,255,0)');
+      shG.addColorStop(0.4, 'rgba(255,255,255,0.8)');
+      shG.addColorStop(0.6, 'rgba(255,255,255,0.8)');
+      shG.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = shG;
+      ctx.fillRect(0, 0, w, h);
+      ctx.restore();
+
+      // ── 5. REC dot (top-left) ──
+      const recA = 0.65 + Math.sin(t * 4.5) * 0.35;
+      ctx.save();
+      ctx.globalAlpha = idleAlpha * recA;
+      ctx.shadowColor = '#ff3333';
+      ctx.shadowBlur = 16;
+      ctx.fillStyle = '#ff3333';
       ctx.beginPath();
-      ctx.arc(wx + 18, wy + 18, 7, 0, Math.PI * 2);
+      ctx.arc(bInset + 22, bInset + 22, 10, 0, Math.PI * 2);
       ctx.fill();
+      ctx.restore();
+
+      // ── 6. Zoom-factor badge (bottom-right) ──
+      const zoomFactor = (w / srcW).toFixed(1);
+      ctx.save();
+      ctx.globalAlpha = idleAlpha * 0.88;
+      ctx.fillStyle = 'rgba(0,0,0,0.68)';
+      ctx.beginPath();
+      ctx.roundRect(w - 118, h - 44, 108, 34, 7);
+      ctx.fill();
+      ctx.fillStyle = accent;
+      ctx.font = 'bold 17px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.shadowColor = accent;
+      ctx.shadowBlur = 8;
+      ctx.fillText(`🔍 ${zoomFactor}× ZOOM`, w - 64, h - 27);
       ctx.restore();
     }
 
@@ -1366,6 +1356,18 @@ const AudioVisualMixer = () => {
     }
     
     // Presenter FX are part of the same canvas, so they are visible in the exported recording.
+    // For focus-wide: snapshot clean content BEFORE FX overlay so we can read it back zoomed
+    if (s.showAnimatedCursor && s.cursorStyle === 'focus-wide') {
+      let oc = offscreenCanvasRef.current;
+      if (!oc || oc.width !== w || oc.height !== h) {
+        oc = document.createElement('canvas');
+        oc.width = w;
+        oc.height = h;
+        offscreenCanvasRef.current = oc;
+      }
+      const octx = oc.getContext('2d');
+      if (octx) octx.drawImage(canvas, 0, 0);
+    }
     drawPresenterFX(ctx, w, h);
     drawWatermark(ctx, w, h);
     // Presenter-only overview panel — reads from main canvas after full render, NOT recorded
