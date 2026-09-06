@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Upload, Play, Pause, Download, Trash2, Film, Music, Image as ImageIcon, RefreshCcw, Shuffle, AlertCircle, VolumeX, Volume2, FileText, Loader2, Video, Clock, Layers, Dices, Sparkles, Type, Tv, ImagePlus, Move, MousePointerClick, SkipBack, SkipForward, LayoutGrid, CheckCircle2, Pencil, Highlighter, MousePointer2, Eraser, Zap, CircleDot } from 'lucide-react';
+import { Upload, Play, Pause, Download, Trash2, Film, Music, Image as ImageIcon, RefreshCcw, Shuffle, AlertCircle, VolumeX, Volume2, FileText, Loader2, Video, Clock, Layers, Dices, Sparkles, Type, Tv, ImagePlus, Move, MousePointerClick, SkipBack, SkipForward, LayoutGrid, CheckCircle2, Pencil, Highlighter, MousePointer2, Eraser, Zap, CircleDot, ZoomIn, ScanSearch } from 'lucide-react';
 
 const AudioVisualMixer = () => {
   // State
@@ -50,6 +50,12 @@ const AudioVisualMixer = () => {
   const [autoHideDrawings, setAutoHideDrawings] = useState(true);
   const [drawingLifetime, setDrawingLifetime] = useState(4);
 
+  // Zoom Lens FX
+  const [zoomLensShape, setZoomLensShape] = useState('circle'); // 'circle' | 'rect'
+  const [zoomLensScale, setZoomLensScale] = useState(2.5);
+  const [zoomLensSize, setZoomLensSize] = useState(180);
+  const [showZoomedScene, setShowZoomedScene] = useState(false);
+
   // Refs (Including UI Performance Refs)
   const canvasRef = useRef(null);
   const audioRef = useRef(null);
@@ -69,6 +75,7 @@ const AudioVisualMixer = () => {
   const activeStrokeRef = useRef(null);
   const clickBurstsRef = useRef([]);
   const lastTrailSampleRef = useRef(0);
+  const overviewCanvasRef = useRef(null);
 
   const TRANSITION_DURATION = 1.5; 
 
@@ -311,7 +318,8 @@ const AudioVisualMixer = () => {
       watermarkType, isPlaying, isRendering, audioDuration, imageDuration, muteVisuals,
       showAnimatedCursor, interactionMode, cursorStyle, cursorSize, cursorTrail,
       interactionIntensity, penColor, penWidth, highlightWidth,
-      autoHideDrawings, drawingLifetime
+      autoHideDrawings, drawingLifetime,
+      zoomLensShape, zoomLensScale, zoomLensSize, showZoomedScene
   };
 
   // --- Media Element Loading Engine ---
@@ -832,6 +840,195 @@ const AudioVisualMixer = () => {
     });
   };
 
+  // --- Zoom Lens FX ---
+
+  const drawZoomLens = (ctx, w, h) => {
+    const s = stateRefs.current;
+    const pointer = pointerRef.current;
+    if (s.interactionMode !== 'zoom' || !pointer.visible) return;
+
+    const cx = pointer.x;
+    const cy = pointer.y;
+    const lensRadius = s.zoomLensSize;
+    const lensW = lensRadius * 2;
+    const lensH = lensRadius * 2;
+    const scale = s.zoomLensScale;
+    const shape = s.zoomLensShape;
+
+    // Source region in canvas coords (the area being magnified)
+    const srcW = lensW / scale;
+    const srcH = lensH / scale;
+    // Clamp source so it never goes out of canvas bounds
+    const srcX = Math.max(0, Math.min(w - srcW, cx - srcW / 2));
+    const srcY = Math.max(0, Math.min(h - srcH, cy - srcH / 2));
+
+    // Lens display position — offset toward top-right, clamped to canvas
+    let lensX = cx + 48;
+    let lensY = cy - lensH - 48;
+    lensX = Math.max(12, Math.min(w - lensW - 12, lensX));
+    lensY = Math.max(12, Math.min(h - lensH - 12, lensY));
+    const lCx = lensX + lensRadius;
+    const lCy = lensY + lensRadius;
+    const borderR = 16;
+
+    // --- Draw magnified content inside clipped lens shape ---
+    ctx.save();
+    ctx.beginPath();
+    if (shape === 'circle') {
+      ctx.arc(lCx, lCy, lensRadius, 0, Math.PI * 2);
+    } else {
+      ctx.roundRect(lensX, lensY, lensW, lensH, borderR);
+    }
+    ctx.clip();
+    ctx.fillStyle = '#000';
+    ctx.fillRect(lensX, lensY, lensW, lensH);
+    try {
+      // Read already-drawn pixels from same canvas (content + strokes are already rendered)
+      ctx.drawImage(canvasRef.current, srcX, srcY, srcW, srcH, lensX, lensY, lensW, lensH);
+    } catch (_) {}
+    ctx.restore();
+
+    // --- Glowing border ---
+    ctx.save();
+    ctx.beginPath();
+    if (shape === 'circle') {
+      ctx.arc(lCx, lCy, lensRadius, 0, Math.PI * 2);
+    } else {
+      ctx.roundRect(lensX, lensY, lensW, lensH, borderR);
+    }
+    ctx.strokeStyle = '#67e8f9';
+    ctx.lineWidth = 3.5;
+    ctx.shadowColor = '#67e8f9';
+    ctx.shadowBlur = 24;
+    ctx.stroke();
+
+    // Subtle inner highlight
+    ctx.beginPath();
+    if (shape === 'circle') {
+      ctx.arc(lCx, lCy, lensRadius - 4, 0, Math.PI * 2);
+    } else {
+      ctx.roundRect(lensX + 3, lensY + 3, lensW - 6, lensH - 6, borderR - 3);
+    }
+    ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+    ctx.lineWidth = 1.5;
+    ctx.shadowBlur = 0;
+    ctx.stroke();
+
+    // --- Scale badge (top of lens) ---
+    const badgeCX = shape === 'circle' ? lCx : lensX + lensW - 40;
+    const badgeCY = lensY + 28;
+    ctx.fillStyle = 'rgba(0,0,0,0.75)';
+    ctx.shadowBlur = 0;
+    ctx.beginPath();
+    ctx.roundRect(badgeCX - 28, badgeCY - 14, 56, 28, 7);
+    ctx.fill();
+    ctx.fillStyle = '#67e8f9';
+    ctx.font = 'bold 18px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.shadowColor = '#67e8f9';
+    ctx.shadowBlur = 8;
+    ctx.fillText(`${scale.toFixed(1)}×`, badgeCX, badgeCY);
+
+    // --- Dashed source-area indicator (on the main scene) ---
+    ctx.save();
+    ctx.setLineDash([10, 5]);
+    ctx.strokeStyle = '#67e8f9';
+    ctx.lineWidth = 2;
+    ctx.globalAlpha = 0.5;
+    ctx.shadowColor = '#67e8f9';
+    ctx.shadowBlur = 12;
+    ctx.beginPath();
+    if (shape === 'circle') {
+      ctx.arc(cx, cy, srcW / 2, 0, Math.PI * 2);
+    } else {
+      ctx.rect(srcX, srcY, srcW, srcH);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Thin connecting line from source region to lens
+    ctx.beginPath();
+    ctx.strokeStyle = '#67e8f9';
+    ctx.lineWidth = 1.2;
+    ctx.globalAlpha = 0.3;
+    ctx.shadowBlur = 4;
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(lCx, shape === 'circle' ? lensY : lensY + lensH / 2);
+    ctx.stroke();
+    ctx.restore();
+
+    ctx.restore();
+  };
+
+  // --- Overview Panel (secondary canvas, presenter-only, NOT recorded) ---
+
+  const drawOverviewPanel = () => {
+    const s = stateRefs.current;
+    if (!s.showZoomedScene || s.interactionMode !== 'zoom') return;
+    const overviewCanvas = overviewCanvasRef.current;
+    const mainCanvas = canvasRef.current;
+    if (!overviewCanvas || !mainCanvas) return;
+    const octx = overviewCanvas.getContext('2d');
+    if (!octx) return;
+
+    const ow = overviewCanvas.width;
+    const oh = overviewCanvas.height;
+    octx.clearRect(0, 0, ow, oh);
+    try {
+      octx.drawImage(mainCanvas, 0, 0, ow, oh);
+    } catch (_) {}
+
+    // Draw zoom region indicator overlay
+    const pointer = pointerRef.current;
+    const scale = s.zoomLensScale;
+    const lensRadius = s.zoomLensSize;
+    const srcW = (lensRadius * 2) / scale;
+    const srcH = (lensRadius * 2) / scale;
+    const srcX = Math.max(0, Math.min(mainCanvas.width - srcW, pointer.x - srcW / 2));
+    const srcY = Math.max(0, Math.min(mainCanvas.height - srcH, pointer.y - srcH / 2));
+    const scaleX = ow / mainCanvas.width;
+    const scaleY = oh / mainCanvas.height;
+
+    octx.save();
+    octx.strokeStyle = '#f97316';
+    octx.lineWidth = 2.5;
+    octx.shadowColor = '#f97316';
+    octx.shadowBlur = 10;
+    octx.setLineDash([7, 4]);
+    octx.beginPath();
+    if (s.zoomLensShape === 'circle') {
+      octx.arc(pointer.x * scaleX, pointer.y * scaleY, (srcW / 2) * scaleX, 0, Math.PI * 2);
+    } else {
+      octx.rect(srcX * scaleX, srcY * scaleY, srcW * scaleX, srcH * scaleY);
+    }
+    octx.stroke();
+    octx.setLineDash([]);
+
+    // Subtle fill inside zoom region
+    octx.globalAlpha = 0.15;
+    octx.fillStyle = '#f97316';
+    octx.beginPath();
+    if (s.zoomLensShape === 'circle') {
+      octx.arc(pointer.x * scaleX, pointer.y * scaleY, (srcW / 2) * scaleX, 0, Math.PI * 2);
+    } else {
+      octx.rect(srcX * scaleX, srcY * scaleY, srcW * scaleX, srcH * scaleY);
+    }
+    octx.fill();
+
+    // Label
+    octx.globalAlpha = 1;
+    octx.font = `bold 11px sans-serif`;
+    octx.fillStyle = '#fb923c';
+    octx.textAlign = 'center';
+    octx.shadowBlur = 6;
+    const labelY = Math.max(16, srcY * scaleY - 6);
+    octx.fillText('Zoom Region', pointer.x * scaleX, labelY);
+    octx.restore();
+  };
+
+  // -------------------------------------------------------
+
   const drawPresenterFX = (ctx, w, h) => {
     const now = performance.now();
     const s = stateRefs.current;
@@ -854,6 +1051,7 @@ const AudioVisualMixer = () => {
     });
 
     drawClickBursts(ctx, now);
+    drawZoomLens(ctx, w, h); // Zoom lens drawn before cursor so cursor sits on top
     drawCursorFX(ctx, w, h, now);
   };
 
@@ -1020,6 +1218,8 @@ const AudioVisualMixer = () => {
     // Presenter FX are part of the same canvas, so they are visible in the exported recording.
     drawPresenterFX(ctx, w, h);
     drawWatermark(ctx, w, h);
+    // Presenter-only overview panel — reads from main canvas after full render, NOT recorded
+    drawOverviewPanel();
 
     if (time >= s.audioDuration && s.isPlaying) {
         // Handle auto-stop at the end of audio when NOT rendering
@@ -1447,20 +1647,23 @@ const AudioVisualMixer = () => {
                   />
                 </div>
 
-                <div className="grid grid-cols-4 gap-2">
+                <div className="grid grid-cols-5 gap-2">
                   {[
                     { id: 'cursor', label: 'Cursor', icon: MousePointer2 },
                     { id: 'pen', label: 'Pen', icon: Pencil },
                     { id: 'highlight', label: 'Mark', icon: Highlighter },
                     { id: 'laser', label: 'Laser', icon: Zap },
+                    { id: 'zoom', label: 'Zoom', icon: ZoomIn },
                   ].map(({ id, label, icon: Icon }) => (
                     <button
                       key={id}
                       type="button"
                       onClick={() => setInteractionMode(id)}
-                      className={`flex flex-col items-center gap-1 rounded-lg px-2 py-2 text-[11px] font-semibold transition-all border ${
+                      className={`flex flex-col items-center gap-1 rounded-lg px-1 py-2 text-[11px] font-semibold transition-all border ${
                         interactionMode === id
-                          ? 'bg-cyan-500/20 border-cyan-400 text-cyan-200 shadow-lg shadow-cyan-500/10'
+                          ? id === 'zoom'
+                            ? 'bg-orange-500/20 border-orange-400 text-orange-200 shadow-lg shadow-orange-500/10'
+                            : 'bg-cyan-500/20 border-cyan-400 text-cyan-200 shadow-lg shadow-cyan-500/10'
                           : 'bg-gray-800/70 border-gray-700 text-gray-400 hover:text-white hover:border-gray-500'
                       }`}
                     >
@@ -1547,6 +1750,76 @@ const AudioVisualMixer = () => {
                 >
                   <Eraser size={14} /> Clear Drawings
                 </button>
+
+                {/* Zoom Lens Controls — shown only when Zoom mode is active */}
+                {interactionMode === 'zoom' && (
+                  <div className="space-y-3 p-3 bg-orange-950/20 rounded-lg border border-orange-500/25 shadow-inner mt-1">
+                    <p className="text-[11px] font-semibold text-orange-300 flex items-center gap-1.5">
+                      <ZoomIn size={13} /> Zoom Lens Settings
+                    </p>
+
+                    {/* Shape toggle */}
+                    <div>
+                      <label className="block text-[10px] text-gray-400 mb-1">Lens Shape</label>
+                      <div className="flex gap-2">
+                        {[{ v: 'circle', label: '⬤ Circle' }, { v: 'rect', label: '▬ Rect' }].map(({ v, label }) => (
+                          <button
+                            key={v}
+                            type="button"
+                            onClick={() => setZoomLensShape(v)}
+                            className={`flex-1 py-1.5 rounded text-[11px] font-semibold transition-all border ${
+                              zoomLensShape === v
+                                ? 'bg-orange-500/25 border-orange-400 text-orange-200'
+                                : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-white'
+                            }`}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Magnification */}
+                    <div>
+                      <div className="flex justify-between text-[10px] text-gray-400 mb-1">
+                        <span>Magnification</span><span>{zoomLensScale.toFixed(1)}×</span>
+                      </div>
+                      <input
+                        type="range" min="1.5" max="5" step="0.1"
+                        value={zoomLensScale}
+                        onChange={e => setZoomLensScale(Number(e.target.value))}
+                        className="w-full accent-orange-400"
+                      />
+                    </div>
+
+                    {/* Lens Size */}
+                    <div>
+                      <div className="flex justify-between text-[10px] text-gray-400 mb-1">
+                        <span>Lens Size</span><span>{zoomLensSize}px</span>
+                      </div>
+                      <input
+                        type="range" min="80" max="300" step="10"
+                        value={zoomLensSize}
+                        onChange={e => setZoomLensSize(Number(e.target.value))}
+                        className="w-full accent-orange-400"
+                      />
+                    </div>
+
+                    {/* Show overview panel toggle */}
+                    <div className="flex items-center justify-between pt-1 border-t border-orange-500/20">
+                      <label className="text-[11px] text-gray-300 flex items-center gap-1.5">
+                        <ScanSearch size={13} className="text-orange-400" />
+                        Scene Overview Panel
+                      </label>
+                      <input
+                        type="checkbox"
+                        checked={showZoomedScene}
+                        onChange={e => setShowZoomedScene(e.target.checked)}
+                        className="w-4 h-4 accent-orange-500"
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="flex items-center justify-between mt-4">
@@ -1633,7 +1906,7 @@ const AudioVisualMixer = () => {
                 onPointerEnter={(e) => { handleCanvasPointerMove(e); pointerRef.current.visible = true; }}
                 onPointerLeave={() => { if (!pointerRef.current.down) pointerRef.current.visible = false; }}
                 className="w-full h-full object-contain select-none"
-                style={{ cursor: showAnimatedCursor ? 'none' : (interactionMode === 'pen' || interactionMode === 'highlight' ? 'crosshair' : 'default'), touchAction: 'none' }}
+                style={{ cursor: showAnimatedCursor ? 'none' : (interactionMode === 'pen' || interactionMode === 'highlight' || interactionMode === 'zoom' ? 'crosshair' : 'default'), touchAction: 'none' }}
              />
              
              {!audioFile && visualAssets.length === 0 && (
@@ -1654,7 +1927,42 @@ const AudioVisualMixer = () => {
                      <p ref={renderProgressRef} className="text-xs text-gray-400">0% Complete</p>
                  </div>
              )}
+
+             {/* Zoom mode indicator badge */}
+             {interactionMode === 'zoom' && (
+               <div className="absolute top-4 left-4 bg-black/70 px-3 py-1.5 rounded-lg z-40 border border-orange-500/40 flex items-center gap-2 text-orange-300 text-xs font-semibold shadow pointer-events-none">
+                 <ZoomIn size={13} />
+                 Zoom Lens Active — hover canvas to zoom
+               </div>
+             )}
           </div>
+
+          {/* Zoomed Scene Overview Panel — presenter only, not recorded */}
+          {showZoomedScene && interactionMode === 'zoom' && (
+            <div className="bg-gray-800 p-4 rounded-xl border border-orange-500/30 shadow-inner">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-bold text-orange-400 flex items-center gap-2">
+                  <ScanSearch size={16} /> Scene Overview — Zoom Region
+                </h3>
+                <span className="text-[10px] text-gray-500 bg-gray-700/60 px-2 py-0.5 rounded">Presenter only · not recorded</span>
+              </div>
+              <div className="relative w-full aspect-video bg-black rounded-lg overflow-hidden border border-gray-700 shadow-inner">
+                <canvas
+                  ref={overviewCanvasRef}
+                  width={640}
+                  height={360}
+                  className="w-full h-full object-contain"
+                />
+                {/* Overlay label */}
+                <div className="absolute bottom-2 right-2 text-[10px] text-gray-500 bg-black/60 px-2 py-0.5 rounded pointer-events-none">
+                  Orange outline = zoomed area
+                </div>
+              </div>
+              <p className="text-[10px] text-gray-500 mt-2 text-center">
+                Move cursor over the main canvas · dashed orange outline shows the area being magnified by the zoom lens
+              </p>
+            </div>
+          )}
 
           <div className="bg-gray-800 p-4 rounded-xl flex items-center gap-4 border border-gray-700 shadow-md">
              {isManualMode && (
