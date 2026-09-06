@@ -719,6 +719,138 @@ const AudioVisualMixer = () => {
       ctx.restore();
     }
 
+    // 16:9 Wide Spotlight — rectangular window with continuous animations.
+    if (s.cursorStyle === 'focus-wide') {
+      const aspect = 16 / 9;
+      // Window size scales with cursorSize; clamp so it fits the canvas
+      const winH = Math.min(h * 0.85, size * 8.2);
+      const winW = Math.min(w * 0.95, winH * aspect);
+      // Center window on cursor, clamped to canvas edges
+      const wx = Math.max(0, Math.min(w - winW, x - winW / 2));
+      const wy = Math.max(0, Math.min(h - winH, y - winH / 2));
+
+      const t = now * 0.001; // seconds
+
+      // ── 1. Dark overlay everywhere OUTSIDE the 16:9 window ──
+      ctx.save();
+      ctx.globalAlpha = 0.80 * idleAlpha;
+      ctx.fillStyle = '#000';
+      // Top strip
+      ctx.fillRect(0, 0, w, wy);
+      // Bottom strip
+      ctx.fillRect(0, wy + winH, w, h - (wy + winH));
+      // Left strip
+      ctx.fillRect(0, wy, wx, winH);
+      // Right strip
+      ctx.fillRect(wx + winW, wy, w - (wx + winW), winH);
+      ctx.restore();
+
+      // ── 2. Subtle inner vignette (edges of the window fade slightly) ──
+      ctx.save();
+      const vigW = Math.min(winW * 0.22, 120);
+      const vigH = Math.min(winH * 0.22, 80);
+      ['left','right','top','bottom'].forEach(edge => {
+        let gx0, gy0, gx1, gy1, rx, ry, rw, rh;
+        if (edge === 'left')   { gx0=wx; gy0=wy; gx1=wx+vigW; gy1=wy; rx=wx; ry=wy; rw=vigW; rh=winH; }
+        if (edge === 'right')  { gx0=wx+winW; gy0=wy; gx1=wx+winW-vigW; gy1=wy; rx=wx+winW-vigW; ry=wy; rw=vigW; rh=winH; }
+        if (edge === 'top')    { gx0=wx; gy0=wy; gx1=wx; gy1=wy+vigH; rx=wx; ry=wy; rw=winW; rh=vigH; }
+        if (edge === 'bottom') { gx0=wx; gy0=wy+winH; gx1=wx; gy1=wy+winH-vigH; rx=wx; ry=wy+winH-vigH; rw=winW; rh=vigH; }
+        const vg = ctx.createLinearGradient(gx0, gy0, gx1, gy1);
+        vg.addColorStop(0, `rgba(0,0,0,${0.35 * idleAlpha})`);
+        vg.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = vg;
+        ctx.fillRect(rx, ry, rw, rh);
+      });
+      ctx.restore();
+
+      // ── 3. Breathing glow border ──
+      const borderPulse = 0.55 + Math.sin(t * 2.6) * 0.45;
+      ctx.save();
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = 3.5;
+      ctx.shadowColor = accent;
+      ctx.shadowBlur = 26 * borderPulse * intensity;
+      ctx.globalAlpha = idleAlpha * (0.75 + borderPulse * 0.25);
+      ctx.strokeRect(wx, wy, winW, winH);
+      // Second faint border slightly inside
+      ctx.globalAlpha = idleAlpha * 0.12;
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.2;
+      ctx.shadowBlur = 0;
+      ctx.strokeRect(wx + 2.5, wy + 2.5, winW - 5, winH - 5);
+      ctx.restore();
+
+      // ── 4. Animated corner L-brackets ──
+      const blenRaw = Math.min(winW, winH) * 0.11;
+      const bPulse = 0.8 + Math.sin(t * 3.2) * 0.2;
+      const blen = blenRaw * bPulse;
+      ctx.save();
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = 4;
+      ctx.lineCap = 'square';
+      ctx.shadowColor = accent;
+      ctx.shadowBlur = 18 * bPulse * intensity;
+      ctx.globalAlpha = idleAlpha;
+      [
+        [wx,        wy,        1,  1],
+        [wx+winW,   wy,       -1,  1],
+        [wx,        wy+winH,   1, -1],
+        [wx+winW,   wy+winH,  -1, -1],
+      ].forEach(([cx2, cy2, dx, dy]) => {
+        ctx.beginPath();
+        ctx.moveTo(cx2 + dx * blen, cy2);
+        ctx.lineTo(cx2, cy2);
+        ctx.lineTo(cx2, cy2 + dy * blen);
+        ctx.stroke();
+      });
+      ctx.restore();
+
+      // ── 5. Horizontal scan line sweeping through the window ──
+      const scanRaw = (t * 55) % winH; // ~3.5 s per sweep
+      const scanY = wy + scanRaw;
+      if (scanY >= wy && scanY <= wy + winH) {
+        ctx.save();
+        ctx.globalAlpha = idleAlpha * 0.55;
+        const sg = ctx.createLinearGradient(wx, scanY - 14, wx, scanY + 14);
+        sg.addColorStop(0, 'rgba(103,232,249,0)');
+        sg.addColorStop(0.45, `rgba(103,232,249,0.42)`);
+        sg.addColorStop(0.5, 'rgba(255,255,255,0.55)');
+        sg.addColorStop(0.55, `rgba(103,232,249,0.42)`);
+        sg.addColorStop(1, 'rgba(103,232,249,0)');
+        ctx.fillStyle = sg;
+        ctx.fillRect(wx, scanY - 14, winW, 28);
+        ctx.restore();
+      }
+
+      // ── 6. Diagonal shimmer wipe (slower, wide sweep) ──
+      const shimmerX = wx - winW + ((t * 38) % (winW * 2));
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(wx, wy, winW, winH);
+      ctx.clip();
+      ctx.globalAlpha = idleAlpha * 0.10;
+      const shimG = ctx.createLinearGradient(shimmerX, wy, shimmerX + winW * 0.45, wy + winH);
+      shimG.addColorStop(0, 'rgba(255,255,255,0)');
+      shimG.addColorStop(0.4, 'rgba(255,255,255,0.6)');
+      shimG.addColorStop(0.6, 'rgba(255,255,255,0.6)');
+      shimG.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = shimG;
+      ctx.fillRect(shimmerX - 20, wy, winW * 0.5, winH);
+      ctx.restore();
+
+      // ── 7. Record indicator dot (top-left badge) ──
+      const recAlpha = 0.7 + Math.sin(t * 4.5) * 0.3; // blinking
+      ctx.save();
+      ctx.globalAlpha = idleAlpha * recAlpha;
+      ctx.shadowColor = '#ff4444';
+      ctx.shadowBlur = 10;
+      ctx.fillStyle = '#ff4444';
+      ctx.beginPath();
+      ctx.arc(wx + 18, wy + 18, 7, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
     // Fluid trail / laser ribbon
     if (s.cursorTrail || mode === 'laser') {
       const maxAge = mode === 'laser' ? 720 : 520;
@@ -752,7 +884,25 @@ const AudioVisualMixer = () => {
     ctx.shadowColor = accent;
     ctx.shadowBlur = 24 * intensity;
 
-    if (s.cursorStyle === 'whisk') {
+    if (s.cursorStyle === 'focus-wide') {
+      // Small crosshair at the cursor hotspot (inside the 16:9 window)
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = 2;
+      ctx.globalAlpha = idleAlpha * 0.65;
+      ctx.shadowColor = accent;
+      ctx.shadowBlur = 10 * intensity;
+      ctx.beginPath();
+      ctx.moveTo(-16, 0); ctx.lineTo(16, 0);
+      ctx.moveTo(0, -16); ctx.lineTo(0, 16);
+      ctx.stroke();
+      // Tiny centre dot
+      ctx.globalAlpha = idleAlpha;
+      ctx.fillStyle = accent;
+      ctx.shadowBlur = 6;
+      ctx.beginPath();
+      ctx.arc(0, 0, 3.5, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (s.cursorStyle === 'whisk') {
       const spin = now * 0.0032;
       for (let i = 0; i < 3; i++) {
         ctx.save();
@@ -1685,6 +1835,7 @@ const AudioVisualMixer = () => {
                       <option value="comet">Comet Glow</option>
                       <option value="neon">Neon Ring</option>
                       <option value="spotlight">Spotlight Focus</option>
+                      <option value="focus-wide">16:9 Wide Spotlight ✦</option>
                     </select>
                   </div>
                   <div>
