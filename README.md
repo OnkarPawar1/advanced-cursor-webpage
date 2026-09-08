@@ -101,10 +101,24 @@ Second subtitle cue
 ```
 
 4. Cues are parsed instantly — a count is shown when active
-5. Use the **Font Size** slider to adjust readability (24–72 px)
+5. Style them in the **Caption Style** panel (live preview included)
 6. Subtitles are **burned into the canvas** — they appear in both the live preview and the exported video
 
-> ✅ Supports Marathi, Hindi, and other Unicode scripts via system fonts.
+#### Caption Style
+Captions are drawn as **outlined text with a fully transparent background** by default — no black box.
+
+| Control | Options |
+|---|---|
+| **Presets** | MrBeast Yellow, Clean White, Neon Green, Cyan Pop, Hot Pink, Gold Lux, Red Alert, Outline Only, Classic Pill, Bar Behind |
+| **Font** | Anton, Bebas Neue, Archivo Black, Luckiest Guy, Bangers, Montserrat Black, Poppins ExtraBold, Rubik Black, Impact, Noto Sans (Google fonts loaded automatically) |
+| **Text / Outline colour** | Full colour pickers, hex fields and one-click swatches |
+| **Outline thickness** | 0–24 px, scaled automatically with the font size |
+| **Font size** | 24–120 px |
+| **Vertical position** | 10–95 % of frame height |
+| **Background** | Transparent (default) · Pill · Full-width bar |
+| **Toggles** | UPPERCASE, drop shadow, pop-in animation (scale bounce on every cue) |
+
+> ✅ Supports Marathi, Hindi, and other Unicode scripts — pick **Noto Sans** for the widest script coverage, since the display faces are Latin-only.
 
 ---
 
@@ -169,6 +183,52 @@ A corner mini-map panel shows the full canvas contents at a glance.
 4. When the audio ends, a `.webm` video file downloads automatically
 
 > 💡 Tip: Make sure the canvas is fully visible during recording for best results.
+
+---
+
+### Live Manual Control (Optional)
+
+Enable **Live Manual Control** in Settings to drive the slideshow yourself while the audio plays — the filmstrip dashboard lets you jump to any clip instantly, and the recording captures exactly what you clicked.
+
+| Control | Description |
+|---|---|
+| **⏮ / ⏭** | Step to the previous / next clip |
+| **Filmstrip** | Click any thumbnail to cut to it immediately (viewed clips are marked green) |
+| **Auto-Advance** | Automatically cuts to the next clip the moment the current one ends — images use the *Image Duration* setting, videos use their own real length |
+| **Loop** | With Auto-Advance on, wraps back to the first clip after the last one so the video never runs out of visuals |
+
+You can still click any thumbnail while Auto-Advance is running — the timer restarts from the clip you picked.
+
+---
+
+### YouTube SEO Studio (ChatGPT API)
+
+Below the preview, the **YouTube SEO Studio** turns the project into a ready-to-upload package using your own OpenAI API key.
+
+1. Paste your **ChatGPT (OpenAI) API key** (optionally remembered in this browser's `localStorage` only — it is never sent anywhere except `api.openai.com`)
+2. Pick a **text model** (`gpt-5`, `gpt-5-mini`, `gpt-4.1`, `gpt-4o`, `o4-mini`, …) or type any newer model id in the free-text box
+3. Pick an **image model** (`gpt-image-1`, `gpt-image-1-mini`, `dall-e-3`, `dall-e-2`) or type a newer one, plus size and quality
+4. Optionally describe the topic/angle — the **video title, subtitle cues and clip filenames already loaded into the app are sent automatically as reference**
+5. Click **Generate Title, Description & Keywords**
+
+| Output | Guarantee |
+|---|---|
+| **Title** | Exactly **100 characters** (a repair pass plus a local trim/pad enforces the count) |
+| **Description** | **3000+ characters** — hook, learning bullets, chapters, deep dive, CTA, hashtags |
+| **Keywords** | 30–45 comma-separated SEO tags, kept under YouTube's 500-character tag limit |
+
+Every field is editable, shows a live character counter, and has its own **Copy** button.
+
+**Thumbnail styles:** pick the art direction before generating —
+
+| Style | Look |
+|---|---|
+| **Annotated Explainer** (default) | White background, huge black condensed headline with a red hand-drawn underline, a detailed 3D render of the subject in the middle, handwritten callout labels with curved arrows, money/chart/coin accents — the "So You Want To Own A ___" business-explainer look |
+| **MrBeast High-Contrast** | Expressive subject, thick yellow outlined headline, saturated electric palette |
+| **Bold Text + Object** | Single hero object, two-tone flat background, poster-style stacked headline |
+| **Cinematic Photo** | Golden-hour photographic shot with a lower-third headline |
+
+**Thumbnail:** the model also returns a detailed 16:9 thumbnail prompt and headline in the chosen style. Click **Generate Thumbnail** to render it, then **Download Thumbnail PNG**. If image generation fails (billing, model access, content filter), the error is shown and **the full prompt stays on screen with a Copy button** so you can paste it into any other image tool as a workaround — you can also click **Build locally** to compose a prompt without calling the API at all.
 
 ---
 

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Upload, Play, Pause, Download, Trash2, Film, Music, Image as ImageIcon, RefreshCcw, Shuffle, AlertCircle, VolumeX, Volume2, FileText, Loader2, Video, Clock, Layers, Dices, Sparkles, Type, Tv, ImagePlus, Move, MousePointerClick, SkipBack, SkipForward, LayoutGrid, CheckCircle2, Pencil, Highlighter, MousePointer2, Eraser, Zap, CircleDot, ZoomIn, ScanSearch } from 'lucide-react';
+import { Upload, Play, Pause, Download, Trash2, Film, Music, Image as ImageIcon, RefreshCcw, Shuffle, AlertCircle, VolumeX, Volume2, FileText, Loader2, Video, Clock, Layers, Dices, Sparkles, Type, Tv, ImagePlus, Move, MousePointerClick, SkipBack, SkipForward, LayoutGrid, CheckCircle2, Pencil, Highlighter, MousePointer2, Eraser, Zap, CircleDot, ZoomIn, ScanSearch, Copy, KeyRound, Wand2, Youtube, Repeat } from 'lucide-react';
 
 const AudioVisualMixer = () => {
   // State
@@ -28,6 +28,13 @@ const AudioVisualMixer = () => {
   const [lastManualChangeTime, setLastManualChangeTime] = useState(0);
   const [manualAnimType, setManualAnimType] = useState('zoom-in');
   const [viewedAssets, setViewedAssets] = useState(new Set([0])); // Track used slides
+  const [manualAutoAdvance, setManualAutoAdvance] = useState(false); // auto jump to next clip when current ends
+  const [manualAutoLoop, setManualAutoLoop] = useState(true); // wrap back to the first clip after the last one
+
+  // Live-updated mirrors of the manual cursor so the render loop can advance clips
+  // without waiting for a React re-render (prevents double-advancing in one frame).
+  const manualIndexRef = useRef(0);
+  const manualChangeTimeRef = useRef(0);
   
   // New Features
   const [videoTitle, setVideoTitle] = useState('');
@@ -62,6 +69,110 @@ const AudioVisualMixer = () => {
   const [subtitleFontSize, setSubtitleFontSize] = useState(42);
   const [subtitleRawText, setSubtitleRawText] = useState('');
   const [subtitleInputTab, setSubtitleInputTab] = useState('paste'); // 'paste' | 'upload'
+
+  // Subtitle typography — MrBeast-style outlined captions, no solid black box by default
+  const SUBTITLE_FONTS = [
+    { id: 'Anton',        label: 'Anton (MrBeast)',   stack: "'Anton', Impact, sans-serif",              weight: 400, google: 'Anton' },
+    { id: 'Bebas Neue',   label: 'Bebas Neue',        stack: "'Bebas Neue', Impact, sans-serif",         weight: 400, google: 'Bebas+Neue' },
+    { id: 'Archivo Black',label: 'Archivo Black',     stack: "'Archivo Black', Arial Black, sans-serif", weight: 400, google: 'Archivo+Black' },
+    { id: 'Luckiest Guy', label: 'Luckiest Guy',      stack: "'Luckiest Guy', Impact, cursive",          weight: 400, google: 'Luckiest+Guy' },
+    { id: 'Bangers',      label: 'Bangers (Comic)',   stack: "'Bangers', Impact, cursive",               weight: 400, google: 'Bangers' },
+    { id: 'Montserrat',   label: 'Montserrat Black',  stack: "'Montserrat', Arial, sans-serif",          weight: 900, google: 'Montserrat:wght@900' },
+    { id: 'Poppins',      label: 'Poppins ExtraBold', stack: "'Poppins', Arial, sans-serif",             weight: 800, google: 'Poppins:wght@800' },
+    { id: 'Rubik',        label: 'Rubik Black',       stack: "'Rubik', Arial, sans-serif",               weight: 900, google: 'Rubik:wght@900' },
+    { id: 'Impact',       label: 'Impact (system)',   stack: "Impact, 'Arial Black', sans-serif",        weight: 400, google: null },
+    { id: 'Noto Sans',    label: 'Noto Sans (clean)', stack: "'Noto Sans', 'Segoe UI', Arial, sans-serif", weight: 700, google: null },
+  ];
+
+  const SUBTITLE_PRESETS = {
+    mrbeast:   { label: 'MrBeast Yellow', font: 'Anton',         color: '#FFE81F', stroke: '#000000', strokeWidth: 12, bg: 'none',  shadow: true,  uppercase: true },
+    white:     { label: 'Clean White',    font: 'Montserrat',    color: '#FFFFFF', stroke: '#000000', strokeWidth: 10, bg: 'none',  shadow: true,  uppercase: false },
+    neon:      { label: 'Neon Green',     font: 'Anton',         color: '#39FF14', stroke: '#06210A', strokeWidth: 11, bg: 'none',  shadow: true,  uppercase: true },
+    cyan:      { label: 'Cyan Pop',       font: 'Bangers',       color: '#00E5FF', stroke: '#001B2E', strokeWidth: 11, bg: 'none',  shadow: true,  uppercase: true },
+    pink:      { label: 'Hot Pink',       font: 'Luckiest Guy',  color: '#FF2E88', stroke: '#2A0014', strokeWidth: 11, bg: 'none',  shadow: true,  uppercase: true },
+    gold:      { label: 'Gold Lux',       font: 'Poppins',       color: '#FFD54A', stroke: '#3A2A00', strokeWidth: 10, bg: 'none',  shadow: true,  uppercase: false },
+    red:       { label: 'Red Alert',      font: 'Archivo Black', color: '#FF3B30', stroke: '#FFFFFF', strokeWidth: 9,  bg: 'none',  shadow: true,  uppercase: true },
+    outlineOnly:{label: 'Outline Only',   font: 'Anton',         color: '#FFFFFF', stroke: '#000000', strokeWidth: 14, bg: 'none',  shadow: false, uppercase: true },
+    pill:      { label: 'Classic Pill',   font: 'Noto Sans',     color: '#FFFFFF', stroke: '#000000', strokeWidth: 0,  bg: 'pill',  shadow: true,  uppercase: false },
+    band:      { label: 'Bar Behind',     font: 'Montserrat',    color: '#FFFFFF', stroke: '#000000', strokeWidth: 4,  bg: 'band',  shadow: false, uppercase: true },
+  };
+
+  const [subtitlePreset, setSubtitlePreset] = useState('mrbeast');
+  const [subtitleFont, setSubtitleFont] = useState('Anton');
+  const [subtitleColor, setSubtitleColor] = useState('#FFE81F');
+  const [subtitleStrokeColor, setSubtitleStrokeColor] = useState('#000000');
+  const [subtitleStrokeWidth, setSubtitleStrokeWidth] = useState(12);
+  const [subtitleBgStyle, setSubtitleBgStyle] = useState('none'); // none | pill | band
+  const [subtitleShadow, setSubtitleShadow] = useState(true);
+  const [subtitleUppercase, setSubtitleUppercase] = useState(true);
+  const [subtitlePopIn, setSubtitlePopIn] = useState(true);
+  const [subtitlePositionY, setSubtitlePositionY] = useState(84); // % of canvas height
+
+  // --- YouTube SEO Studio (OpenAI / ChatGPT API) ---
+  const OPENAI_TEXT_MODELS = [
+    'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-4.1', 'gpt-4.1-mini',
+    'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3'
+  ];
+  const OPENAI_IMAGE_MODELS = ['gpt-image-1', 'gpt-image-1-mini', 'dall-e-3', 'dall-e-2'];
+  const IMAGE_SIZES = {
+    'gpt-image-1': ['1536x1024', '1024x1024', '1024x1536', 'auto'],
+    'gpt-image-1-mini': ['1536x1024', '1024x1024', '1024x1536', 'auto'],
+    'dall-e-3': ['1792x1024', '1024x1024', '1024x1792'],
+    'dall-e-2': ['1024x1024', '512x512', '256x256'],
+  };
+
+  const [openAiKey, setOpenAiKey] = useState(() => {
+    try { return localStorage.getItem('pfx_openai_key') || ''; } catch (e) { return ''; }
+  });
+  const [rememberKey, setRememberKey] = useState(true);
+  const [textModel, setTextModel] = useState('gpt-5');
+  const [customTextModel, setCustomTextModel] = useState('');
+  const [imageModel, setImageModel] = useState('gpt-image-1');
+  const [customImageModel, setCustomImageModel] = useState('');
+  const [thumbSize, setThumbSize] = useState('1536x1024');
+  const [thumbStyle, setThumbStyle] = useState('infographic');
+  const [thumbQuality, setThumbQuality] = useState('high');
+
+  const [seoTopic, setSeoTopic] = useState('');
+  const [seoTitle, setSeoTitle] = useState('');
+  const [seoDescription, setSeoDescription] = useState('');
+  const [seoKeywords, setSeoKeywords] = useState('');
+  const [thumbPrompt, setThumbPrompt] = useState('');
+  const [thumbHeadline, setThumbHeadline] = useState('');
+  const [thumbImage, setThumbImage] = useState('');
+  const [seoLoading, setSeoLoading] = useState(false);
+  const [thumbLoading, setThumbLoading] = useState(false);
+  const [seoError, setSeoError] = useState('');
+  const [thumbError, setThumbError] = useState('');
+  const [seoStatus, setSeoStatus] = useState('');
+  const [copiedField, setCopiedField] = useState('');
+
+  // Thumbnail art-direction presets. "infographic" mirrors the annotated
+  // "SO YOU WANT TO OWN A ___" explainer look (white background, black headline,
+  // red underline, rendered building, handwritten callouts).
+  const THUMB_STYLES = {
+    infographic: {
+      label: 'Annotated Explainer (reference)',
+      brief: `Clean flat-white background YouTube thumbnail in a business-explainer infographic style.
+LAYOUT: a huge ALL-CAPS headline across the top in a heavy black condensed sans-serif (Anton / Archivo Black look), broken over two lines — a smaller first line and a much larger second line naming the subject — with a hand-drawn red marker underline swooshed beneath the key words. The centre of the frame holds a highly detailed, crisp 3D-rendered miniature of the main subject (building / facility / vehicle) shot straight-on, softly grounded with a light shadow.
+ANNOTATIONS: six to eight short handwritten-style labels in dark grey ink placed in the white space around the render (top-left, top-right, bottom-left, bottom-right), each connected to the render with a thin hand-drawn curved arrow. Labels name business drivers (revenue streams, operating costs, staffing, location & foot traffic, maintenance, profitability & ROI).
+SUPPORTING ELEMENTS: a small rising green bar chart with stacks of cash on the left, gold coin stacks and a dollar coin on the right, and a compact dark icon list/menu card with coloured icons on one side.
+STYLE: bright, clean, high key, lots of white space, sharp vector-meets-3D-render mix, no photographic people, no clutter, no watermark, no logo. Every label must stay short and legible when the image is scaled to a small mobile thumbnail.`,
+    },
+    mrbeast: {
+      label: 'MrBeast High-Contrast',
+      brief: `Explosive high-CTR YouTube thumbnail: one expressive human subject on the right third with dramatic rim lighting and a shocked/excited expression, a thick ALL-CAPS outlined headline on the left third in bright yellow with a heavy black outline, saturated electric blue/orange palette, glowing accents, subtle motion streaks, blurred topic-relevant background with strong depth of field, extreme contrast, nothing small or fiddly. No watermark, no logo, no extra text besides the headline.`,
+    },
+    boldtext: {
+      label: 'Bold Text + Object',
+      brief: `Minimal, punchy YouTube thumbnail: a single hero object centred on a bold flat two-tone background (deep navy and vivid amber), a very large ALL-CAPS headline stacked in two lines beside it in white with a thick dark outline, a bright accent underline, soft studio lighting on the object, generous negative space, poster-like composition. No people, no watermark, no extra text.`,
+    },
+    cinematic: {
+      label: 'Cinematic Photo',
+      brief: `Cinematic photographic YouTube thumbnail: dramatic wide shot of the subject at golden hour, shallow depth of field, film-grade colour grade with teal shadows and warm highlights, volumetric light, and a bold ALL-CAPS headline in the lower third in white with a heavy dark outline and a subtle gradient scrim behind it for legibility. No watermark, no logo, no extra text besides the headline.`,
+    },
+  };
+
 
   // Refs (Including UI Performance Refs)
   const canvasRef = useRef(null);
@@ -253,6 +364,7 @@ const AudioVisualMixer = () => {
   // Out of bounds safety checker
   useEffect(() => {
       if (manualAssetIndex >= activeAssets.length && activeAssets.length > 0) {
+          manualIndexRef.current = activeAssets.length - 1;
           setManualAssetIndex(activeAssets.length - 1);
       }
   }, [activeAssets.length, manualAssetIndex]);
@@ -321,14 +433,17 @@ const AudioVisualMixer = () => {
   // --- Centralized State Ref for Render Loop (Zero Closure Staleness) ---
   const stateRefs = useRef({});
   stateRefs.current = {
-      isManualMode, manualAssetIndex, lastManualChangeTime, manualAnimType, 
+      isManualMode, manualAssetIndex, lastManualChangeTime, manualAnimType,
+      manualAutoAdvance, manualAutoLoop, 
       activeAssets, timeline, enableImageAnimations, showWatermark, channelName, 
       watermarkType, isPlaying, isRendering, audioDuration, imageDuration, muteVisuals,
       showAnimatedCursor, interactionMode, cursorStyle, cursorSize, cursorTrail,
       interactionIntensity, penColor, penWidth, highlightWidth,
       autoHideDrawings, drawingLifetime,
       zoomLensShape, zoomLensScale, zoomLensSize, showZoomedScene,
-      parsedCues, showSubtitles, subtitleFontSize
+      parsedCues, showSubtitles, subtitleFontSize,
+      subtitleFont, subtitleColor, subtitleStrokeColor, subtitleStrokeWidth,
+      subtitleBgStyle, subtitleShadow, subtitleUppercase, subtitlePopIn, subtitlePositionY
   };
 
   // --- Media Element Loading Engine ---
@@ -407,6 +522,28 @@ const AudioVisualMixer = () => {
     setParsedCues(cues);
   };
 
+  // --- Google font loading so the canvas can actually render the display faces ---
+  useEffect(() => {
+    const families = SUBTITLE_FONTS.map(f => f.google).filter(Boolean);
+    const href = `https://fonts.googleapis.com/css2?${families.map(f => `family=${f}`).join('&')}&display=swap`;
+    if (!document.getElementById('pfx-subtitle-fonts')) {
+      const link = document.createElement('link');
+      link.id = 'pfx-subtitle-fonts';
+      link.rel = 'stylesheet';
+      link.href = href;
+      document.head.appendChild(link);
+    }
+  }, []);
+
+  // Canvas only paints a font once it is actually loaded — warm the active one up.
+  useEffect(() => {
+    const def = SUBTITLE_FONTS.find(f => f.id === subtitleFont);
+    if (!def || !document.fonts) return;
+    document.fonts.load(`${def.weight} 64px ${def.stack.split(',')[0]}`).catch(() => {});
+  }, [subtitleFont]);
+
+  const getSubtitleFontDef = (id) => SUBTITLE_FONTS.find(f => f.id === id) || SUBTITLE_FONTS[0];
+
   // --- Subtitle Canvas Draw ---
   const drawSubtitle = (ctx, w, h, time) => {
     const s = stateRefs.current;
@@ -414,16 +551,18 @@ const AudioVisualMixer = () => {
     const cue = s.parsedCues.find(c => time >= c.start && time < c.end);
     if (!cue) return;
 
+    const fontDef = getSubtitleFontDef(s.subtitleFont);
     const fontSize = s.subtitleFontSize || 42;
-    const font = `bold ${fontSize}px 'Noto Sans', 'Segoe UI', Arial, sans-serif`;
+    const font = `${fontDef.weight} ${fontSize}px ${fontDef.stack}`;
     ctx.save();
     ctx.font = font;
 
-    const lines = cue.text.split('\n');
-    const lineH = fontSize * 1.4;
+    const rawText = s.subtitleUppercase ? cue.text.toUpperCase() : cue.text;
+    const lines = rawText.split('\n');
+    const lineH = fontSize * 1.22;
     const paddingX = 32;
     const paddingY = 18;
-    const maxW = w * 0.88;
+    const maxW = w * 0.86;
 
     // Word-wrap each line to fit maxW
     const wrappedLines = [];
@@ -441,29 +580,96 @@ const AudioVisualMixer = () => {
       }
       if (current) wrappedLines.push(current);
     }
+    if (wrappedLines.length === 0) { ctx.restore(); return; }
 
-    const boxH = wrappedLines.length * lineH + paddingY * 2;
-    const boxW = Math.min(maxW + paddingX * 2,
-      Math.max(...wrappedLines.map(l => ctx.measureText(l).width)) + paddingX * 2);
-    const boxX = (w - boxW) / 2;
-    const boxY = h - boxH - 52;
+    const widest = Math.max(...wrappedLines.map(l => ctx.measureText(l).width));
+    const blockH = wrappedLines.length * lineH;
+    const centerX = w / 2;
+    const centerY = h * ((s.subtitlePositionY ?? 84) / 100);
+    const firstLineCenter = centerY - blockH / 2 + lineH / 2;
 
-    // Background pill
-    ctx.fillStyle = 'rgba(0,0,0,0.72)';
-    ctx.beginPath();
-    ctx.roundRect(boxX, boxY, boxW, boxH, 12);
-    ctx.fill();
+    // Pop-in: a short scale bounce as each cue appears (MrBeast style)
+    if (s.subtitlePopIn) {
+      const age = time - cue.start;
+      const dur = 0.22;
+      if (age >= 0 && age < dur) {
+        const p = age / dur;
+        const eased = 1 - Math.pow(1 - p, 3);
+        const scale = 0.72 + 0.28 * eased + Math.sin(p * Math.PI) * 0.06;
+        ctx.translate(centerX, centerY);
+        ctx.scale(scale, scale);
+        ctx.translate(-centerX, -centerY);
+      }
+    }
 
-    // Text
-    ctx.fillStyle = '#ffffff';
+    // Optional background — 'none' keeps the text fully transparent behind the glyphs
+    if (s.subtitleBgStyle === 'pill') {
+      const boxW = Math.min(maxW + paddingX * 2, widest + paddingX * 2);
+      const boxH = blockH + paddingY * 2;
+      ctx.fillStyle = 'rgba(0,0,0,0.72)';
+      ctx.beginPath();
+      ctx.roundRect(centerX - boxW / 2, centerY - boxH / 2, boxW, boxH, 12);
+      ctx.fill();
+    } else if (s.subtitleBgStyle === 'band') {
+      const boxH = blockH + paddingY * 1.4;
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillRect(0, centerY - boxH / 2, w, boxH);
+    }
+
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'center';
-    ctx.shadowColor = 'rgba(0,0,0,0.9)';
-    ctx.shadowBlur = 6;
+    ctx.lineJoin = 'round';
+    ctx.miterLimit = 2;
+
+    const strokeW = s.subtitleStrokeWidth || 0;
+    // Stroke scales with the font size so the outline stays proportional at any size.
+    const scaledStroke = strokeW * (fontSize / 42);
+
     wrappedLines.forEach((line, i) => {
-      ctx.fillText(line, w / 2, boxY + paddingY + lineH * i + lineH / 2);
+      const y = firstLineCenter + lineH * i;
+
+      // Soft drop shadow for separation from busy footage.
+      // Painted on a carrier pass so the glyph interior stays transparent.
+      if (s.subtitleShadow) {
+        ctx.save();
+        ctx.shadowColor = 'rgba(0,0,0,0.85)';
+        ctx.shadowBlur = fontSize * 0.35;
+        ctx.shadowOffsetY = fontSize * 0.08;
+        if (scaledStroke > 0) {
+          ctx.lineWidth = scaledStroke;
+          ctx.strokeStyle = s.subtitleStrokeColor || '#000000';
+          ctx.strokeText(line, centerX, y);
+        } else {
+          ctx.fillStyle = s.subtitleColor || '#ffffff';
+          ctx.fillText(line, centerX, y);
+        }
+        ctx.restore();
+      }
+
+      if (scaledStroke > 0) {
+        ctx.lineWidth = scaledStroke;
+        ctx.strokeStyle = s.subtitleStrokeColor || '#000000';
+        ctx.strokeText(line, centerX, y);
+      }
+
+      ctx.fillStyle = s.subtitleColor || '#ffffff';
+      ctx.fillText(line, centerX, y);
     });
+
     ctx.restore();
+  };
+
+  const applySubtitlePreset = (key) => {
+    const preset = SUBTITLE_PRESETS[key];
+    if (!preset) return;
+    setSubtitlePreset(key);
+    setSubtitleFont(preset.font);
+    setSubtitleColor(preset.color);
+    setSubtitleStrokeColor(preset.stroke);
+    setSubtitleStrokeWidth(preset.strokeWidth);
+    setSubtitleBgStyle(preset.bg);
+    setSubtitleShadow(preset.shadow);
+    setSubtitleUppercase(preset.uppercase);
   };
 
   // --- Asset Reorder Helpers ---
@@ -1337,6 +1543,19 @@ const AudioVisualMixer = () => {
     drawCursorFX(ctx, w, h, now);
   };
 
+  // How long a clip should stay on screen in Live Manual mode before auto-advance.
+  // Videos play out their real length; images use the configured slide duration.
+  const getManualClipDuration = (asset, fallback) => {
+    const base = fallback || 5;
+    if (!asset) return base;
+    if (asset.type === 'video') {
+      const vid = videoElementsRef.current[asset.id];
+      const dur = (vid && isFinite(vid.duration) && vid.duration > 0) ? vid.duration : asset.duration;
+      if (dur && isFinite(dur) && dur > 0) return dur;
+    }
+    return base;
+  };
+
   // --- Completely decoupled drawing function to prevent React freezes ---
   const drawFrame = () => {
     if (!audioRef.current || !canvasRef.current) return;
@@ -1365,14 +1584,34 @@ const AudioVisualMixer = () => {
     ctx.fillRect(0, 0, w, h);
 
     if (s.isManualMode) {
-        const asset = s.activeAssets[s.manualAssetIndex];
+        // Auto-advance: when the current clip has played out its natural length,
+        // roll straight into the next one (videos use their own duration).
+        if (s.manualAutoAdvance && (s.isPlaying || s.isRendering) && s.activeAssets.length > 1) {
+            const current = s.activeAssets[manualIndexRef.current];
+            if (current) {
+                const clipDuration = getManualClipDuration(current, s.imageDuration);
+                if (time - manualChangeTimeRef.current >= clipDuration) {
+                    const nextIdx = manualIndexRef.current + 1;
+                    if (nextIdx < s.activeAssets.length) {
+                        handleSelectManual(nextIdx);
+                    } else if (s.manualAutoLoop) {
+                        handleSelectManual(0);
+                    } else {
+                        // Park on the last clip so it does not keep re-triggering.
+                        manualChangeTimeRef.current = time;
+                    }
+                }
+            }
+        }
+
+        const asset = s.activeAssets[manualIndexRef.current] || s.activeAssets[s.manualAssetIndex];
         if (asset) {
-            const t = time - s.lastManualChangeTime;
+            const t = time - manualChangeTimeRef.current;
             // Provide a realistic duration for the mock segment so Ken Burns keeps panning!
             const mockSegment = {
                 asset,
-                startTime: s.lastManualChangeTime,
-                endTime: s.lastManualChangeTime + s.imageDuration,
+                startTime: manualChangeTimeRef.current,
+                endTime: manualChangeTimeRef.current + getManualClipDuration(asset, s.imageDuration),
                 imgAnim: s.manualAnimType
             };
             drawAsset(ctx, asset, t, 1, null, mockSegment);
@@ -1546,6 +1785,7 @@ const AudioVisualMixer = () => {
     } else {
       if (audioRef.current.currentTime >= audioDuration) {
           audioRef.current.currentTime = 0;
+          manualChangeTimeRef.current = 0;
       }
       audioRef.current.play();
       setIsPlaying(true);
@@ -1553,8 +1793,11 @@ const AudioVisualMixer = () => {
   };
 
   const handleSelectManual = (idx) => {
+      const now = audioRef.current?.currentTime || 0;
+      manualIndexRef.current = idx;
+      manualChangeTimeRef.current = now;
       setManualAssetIndex(idx);
-      setLastManualChangeTime(audioRef.current?.currentTime || 0);
+      setLastManualChangeTime(now);
       
       const anims = ['zoom-in', 'zoom-out', 'pan-left', 'pan-right', 'pan-up', 'pan-down'];
       setManualAnimType(anims[Math.floor(Math.random() * anims.length)]);
@@ -1582,6 +1825,7 @@ const AudioVisualMixer = () => {
     setIsRendering(true);
     setIsPlaying(false);
     audioRef.current.currentTime = 0;
+    manualChangeTimeRef.current = 0;
 
     const canvasStream = canvasRef.current.captureStream(30); 
     const audioCtx = new AudioContext();
@@ -1646,6 +1890,272 @@ const AudioVisualMixer = () => {
           if (audioEl) audioEl.removeEventListener('ended', handleEnded);
       }
   }, [isRendering]);
+
+
+  // ==========================================================
+  // YouTube SEO Studio — ChatGPT metadata + thumbnail generation
+  // ==========================================================
+
+  const effectiveTextModel = (customTextModel.trim() || textModel).trim();
+  const effectiveImageModel = (customImageModel.trim() || imageModel).trim();
+
+  useEffect(() => {
+    try {
+      if (rememberKey && openAiKey) localStorage.setItem('pfx_openai_key', openAiKey);
+      if (!rememberKey) localStorage.removeItem('pfx_openai_key');
+    } catch (e) { /* storage blocked — key just stays in memory */ }
+  }, [openAiKey, rememberKey]);
+
+  // Keep the size selector valid whenever the image model changes.
+  useEffect(() => {
+    const allowed = IMAGE_SIZES[effectiveImageModel];
+    if (allowed && !allowed.includes(thumbSize)) setThumbSize(allowed[0]);
+  }, [effectiveImageModel]);
+
+  const copyToClipboard = async (text, field) => {
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (e) {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); } catch (err) { /* ignore */ }
+      document.body.removeChild(ta);
+    }
+    setCopiedField(field);
+    setTimeout(() => setCopiedField(prev => (prev === field ? '' : prev)), 1600);
+  };
+
+  // Everything we already know about this video, handed to the model as reference.
+  const buildVideoReference = () => {
+    const parts = [];
+    if (videoTitle.trim()) parts.push(`Working video title: ${videoTitle.trim()}`);
+    if (channelName.trim()) parts.push(`Channel name: ${channelName.trim()}`);
+    if (seoTopic.trim()) parts.push(`Creator notes about the topic: ${seoTopic.trim()}`);
+    const transcript = (parsedCues.length
+      ? parsedCues.map(c => c.text).join(' ')
+      : subtitleRawText
+    ).replace(/\s+/g, ' ').trim();
+    if (transcript) {
+      parts.push(`Subtitle / transcript of the actual video (main source of truth):\n${transcript.slice(0, 8000)}`);
+    }
+    const names = visualAssets.slice(0, 40).map(a => a.name).join(', ');
+    if (names) parts.push(`Slide and clip filenames used in the video: ${names}`);
+    if (audioDuration) parts.push(`Video length: ${formatTime(audioDuration)}`);
+    return parts.join('\n\n') || 'No extra reference supplied — rely on the topic given by the creator.';
+  };
+
+  const callChatCompletion = async (messages, maxTokens = 8000) => {
+    const send = async (tokenField) => {
+      const body = {
+        model: effectiveTextModel,
+        messages,
+        response_format: { type: 'json_object' },
+      };
+      body[tokenField] = maxTokens;
+      const res = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${openAiKey.trim()}`,
+        },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const msg = data?.error?.message || `OpenAI returned HTTP ${res.status}`;
+        const err = new Error(msg);
+        err.raw = data;
+        throw err;
+      }
+      return data;
+    };
+
+    let data;
+    try {
+      data = await send('max_completion_tokens');
+    } catch (e) {
+      // Older models still expect max_tokens.
+      if (/max_tokens|max_completion_tokens|Unsupported parameter/i.test(e.message || '')) {
+        data = await send('max_tokens');
+      } else {
+        throw e;
+      }
+    }
+
+    const content = data?.choices?.[0]?.message?.content || '';
+    if (!content) throw new Error('The model returned an empty response. Try a different text model.');
+    try {
+      return JSON.parse(content);
+    } catch (e) {
+      const match = content.match(/\{[\s\S]*\}/);
+      if (match) return JSON.parse(match[0]);
+      throw new Error('Could not parse the model response as JSON.');
+    }
+  };
+
+  // YouTube titles cap at 100 chars and the ask is *exactly* 100 — trim or pad locally
+  // as a last resort so the field is always usable even if the model misses the count.
+  const forceTitleTo100 = (raw, keywordsCsv) => {
+    let t = (raw || '').replace(/\s+/g, ' ').trim().replace(/^["']|["']$/g, '');
+    if (t.length > 100) {
+      t = t.slice(0, 100);
+      const cut = t.lastIndexOf(' ');
+      if (cut > 70) t = t.slice(0, cut);
+    }
+    if (t.length < 100) {
+      const fillers = (keywordsCsv || '')
+        .split(',')
+        .map(k => k.trim())
+        .filter(Boolean)
+        .map(k => k.replace(/\b\w/g, c => c.toUpperCase()))
+        .concat(['Full Guide', 'Step By Step', 'Explained Simply', 'Beginner Friendly', 'Complete Tutorial', 'Must Watch']);
+      for (const filler of fillers) {
+        if (t.length >= 100) break;
+        const candidate = `${t} | ${filler}`;
+        if (candidate.length <= 100) t = candidate;
+      }
+      while (t.length < 100) t += (t.length === 99 ? '!' : ' .').slice(0, 100 - t.length) || '.';
+    }
+    return t.slice(0, 100);
+  };
+
+  const generateSeoMetadata = async () => {
+    if (!openAiKey.trim()) { setSeoError('Add your ChatGPT (OpenAI) API key first.'); return; }
+    setSeoLoading(true);
+    setSeoError('');
+    setSeoStatus('Asking ' + effectiveTextModel + ' for metadata…');
+
+    const reference = buildVideoReference();
+    const system = 'You are a senior YouTube growth strategist and SEO copywriter. You always answer with a single valid JSON object and nothing else.';
+    const user = `Write complete, SEO-optimised YouTube upload metadata for this video.
+
+REFERENCE MATERIAL ABOUT THE VIDEO:
+${reference}
+
+Return JSON with EXACTLY these keys:
+{
+  "title": string,               // EXACTLY 100 characters including spaces. Click-worthy, front-loads the main keyword, no clickbait lies, no surrounding quotes.
+  "description": string,         // AT LEAST 3000 characters. Structure: a strong 2-3 line hook, "In this video you will learn:" bullet list, a timestamped chapter list starting at 00:00, a detailed 3-5 paragraph deep dive on the topic, who the video is for, tools/resources mentioned, a call to action to like/subscribe, and a final block of relevant hashtags. Naturally repeat the primary and secondary keywords. Plain text only, no markdown headings.
+  "keywords": string,            // 30-45 comma-separated YouTube tags, lowercase, mixing head terms, long-tail phrases and question queries. Total under 480 characters.
+  "thumbnail_headline": string,  // 3-5 punchy words for the thumbnail text overlay, ALL CAPS.
+  "thumbnail_prompt": string     // A detailed image-generation prompt for a 16:9 YouTube thumbnail, written in the exact art direction below and adapted to THIS video's subject. Name the concrete subject to render and write out the real annotation labels / headline words to draw.
+}
+
+THUMBNAIL ART DIRECTION TO FOLLOW (${THUMB_STYLES[thumbStyle].label}):
+${THUMB_STYLES[thumbStyle].brief}
+The headline drawn in the image must be the thumbnail_headline value.
+
+The character counts are hard requirements: count them before answering.`;
+
+    try {
+      let result = await callChatCompletion([
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+      ]);
+
+      let title = String(result.title || '');
+      let description = String(result.description || '');
+      let keywords = String(result.keywords || '');
+
+      // One repair pass if the model missed the hard length requirements.
+      if (title.length !== 100 || description.length < 3000) {
+        setSeoStatus('Fixing lengths (title ' + title.length + ' chars, description ' + description.length + ' chars)…');
+        const repair = await callChatCompletion([
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+          { role: 'assistant', content: JSON.stringify(result) },
+          { role: 'user', content: `The title is ${title.length} characters (must be EXACTLY 100) and the description is ${description.length} characters (must be AT LEAST 3000, aim for 3500). Rewrite and return the same JSON object with every key present, fixing the lengths. Keep the same meaning and keywords.` },
+        ]);
+        if (repair.title) title = String(repair.title);
+        if (repair.description && String(repair.description).length > description.length) description = String(repair.description);
+        if (repair.keywords) keywords = String(repair.keywords);
+        if (repair.thumbnail_prompt) result.thumbnail_prompt = repair.thumbnail_prompt;
+        if (repair.thumbnail_headline) result.thumbnail_headline = repair.thumbnail_headline;
+      }
+
+      setSeoTitle(forceTitleTo100(title, keywords));
+      setSeoDescription(description.trim());
+      setSeoKeywords(keywords.replace(/\s*,\s*/g, ', ').trim());
+      setThumbHeadline(String(result.thumbnail_headline || '').trim());
+      setThumbPrompt(String(result.thumbnail_prompt || '').trim());
+      setSeoStatus('Metadata ready.');
+    } catch (e) {
+      setSeoError(e.message || 'Metadata generation failed.');
+      setSeoStatus('');
+    } finally {
+      setSeoLoading(false);
+    }
+  };
+
+  const fallbackThumbPrompt = () => {
+    const headline = (thumbHeadline || videoTitle || seoTopic || 'WATCH THIS')
+      .toUpperCase().replace(/\s+/g, ' ').trim().split(' ').slice(0, 6).join(' ');
+    const subject = seoTopic.trim() || videoTitle.trim() || 'the video topic';
+    const style = THUMB_STYLES[thumbStyle] || THUMB_STYLES.infographic;
+    return `16:9 YouTube thumbnail about ${subject}.
+
+${style.brief}
+
+The headline text drawn in the image must read exactly: "${headline}".`;
+  };
+
+  const generateThumbnail = async () => {
+    if (!openAiKey.trim()) { setThumbError('Add your ChatGPT (OpenAI) API key first.'); return; }
+    const prompt = (thumbPrompt.trim() || fallbackThumbPrompt());
+    if (!thumbPrompt.trim()) setThumbPrompt(prompt);
+
+    setThumbLoading(true);
+    setThumbError('');
+    setThumbImage('');
+
+    try {
+      const isDalle = effectiveImageModel.startsWith('dall-e');
+      const body = { model: effectiveImageModel, prompt, n: 1 };
+      if (thumbSize && thumbSize !== 'auto') body.size = thumbSize;
+      if (isDalle) {
+        body.response_format = 'b64_json';
+        if (effectiveImageModel === 'dall-e-3') body.quality = thumbQuality === 'low' ? 'standard' : 'hd';
+      } else {
+        body.quality = thumbQuality;
+      }
+
+      const res = await fetch('https://api.openai.com/v1/images/generations', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${openAiKey.trim()}`,
+        },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error?.message || `OpenAI returned HTTP ${res.status}`);
+
+      const item = data?.data?.[0];
+      if (item?.b64_json) setThumbImage(`data:image/png;base64,${item.b64_json}`);
+      else if (item?.url) setThumbImage(item.url);
+      else throw new Error('No image came back from the API.');
+    } catch (e) {
+      // Workaround path: the prompt stays on screen so it can be pasted into any image tool.
+      setThumbError(`${e.message || 'Image generation failed.'} — copy the prompt below and generate the thumbnail manually.`);
+      if (!thumbPrompt.trim()) setThumbPrompt(prompt);
+    } finally {
+      setThumbLoading(false);
+    }
+  };
+
+  const downloadThumbnail = () => {
+    if (!thumbImage) return;
+    const a = document.createElement('a');
+    a.href = thumbImage;
+    const base = (videoTitle || seoTopic || 'youtube-thumbnail').replace(/[^a-zA-Z0-9 ]/g, '').trim().replace(/\s+/g, '_') || 'youtube-thumbnail';
+    a.download = `${base}_thumbnail.png`;
+    a.click();
+  };
 
   return (
     <div className="min-h-screen bg-gray-900 text-white font-sans p-6 overflow-x-hidden">
@@ -1950,19 +2460,177 @@ const AudioVisualMixer = () => {
                 <p className="text-xs text-indigo-400 mt-1">✅ {parsedCues.length} subtitle cues active</p>
               )}
 
-              {/* Font size */}
+              {/* Caption Styling */}
               {showSubtitles && (
-                <div className="mt-3">
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs text-gray-400">Font Size</label>
-                    <span className="text-xs text-indigo-300">{subtitleFontSize}px</span>
+                <div className="mt-4 space-y-3 p-3 bg-gray-900/50 rounded-lg border border-gray-700">
+                  <div className="flex items-center gap-2 text-xs font-semibold text-gray-300">
+                    <Type size={13} className="text-yellow-400" /> Caption Style
                   </div>
-                  <input
-                    type="range" min={24} max={72} step={2}
-                    value={subtitleFontSize}
-                    onChange={(e) => setSubtitleFontSize(Number(e.target.value))}
-                    className="w-full h-1.5 accent-indigo-500"
-                  />
+
+                  {/* Live preview */}
+                  <div className="rounded-lg overflow-hidden border border-gray-700 bg-[linear-gradient(135deg,#4b5563_25%,#374151_25%,#374151_50%,#4b5563_50%,#4b5563_75%,#374151_75%)] bg-[length:16px_16px] py-4 px-2 flex items-center justify-center min-h-[64px]">
+                    <span
+                      style={{
+                        fontFamily: getSubtitleFontDef(subtitleFont).stack,
+                        fontWeight: getSubtitleFontDef(subtitleFont).weight,
+                        fontSize: `${Math.max(16, Math.round(subtitleFontSize * 0.5))}px`,
+                        color: subtitleColor,
+                        WebkitTextStrokeWidth: `${(subtitleStrokeWidth * 0.5) / 2}px`,
+                        WebkitTextStrokeColor: subtitleStrokeColor,
+                        paintOrder: 'stroke fill',
+                        textShadow: subtitleShadow ? '0 2px 6px rgba(0,0,0,0.85)' : 'none',
+                        background: subtitleBgStyle === 'pill' ? 'rgba(0,0,0,0.72)' : subtitleBgStyle === 'band' ? 'rgba(0,0,0,0.55)' : 'transparent',
+                        padding: subtitleBgStyle === 'none' ? 0 : '4px 10px',
+                        borderRadius: subtitleBgStyle === 'pill' ? 8 : 0,
+                        lineHeight: 1.2,
+                        textAlign: 'center',
+                      }}
+                    >
+                      {subtitleUppercase ? 'SAMPLE CAPTION TEXT' : 'Sample caption text'}
+                    </span>
+                  </div>
+
+                  {/* Presets */}
+                  <div>
+                    <label className="block text-[11px] text-gray-400 mb-1">Preset</label>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {Object.entries(SUBTITLE_PRESETS).map(([key, preset]) => (
+                        <button
+                          key={key}
+                          onClick={() => applySubtitlePreset(key)}
+                          className={`px-2 py-1.5 text-[11px] rounded border transition-all truncate ${
+                            subtitlePreset === key
+                              ? 'border-yellow-400 bg-gray-800 shadow-sm'
+                              : 'border-gray-700 bg-gray-800/50 hover:border-gray-500'
+                          }`}
+                          style={{ color: preset.color, WebkitTextStrokeWidth: '0.4px', WebkitTextStrokeColor: preset.stroke }}
+                        >
+                          {preset.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Font family */}
+                  <div>
+                    <label className="block text-[11px] text-gray-400 mb-1">Font</label>
+                    <select
+                      value={subtitleFont}
+                      onChange={(e) => setSubtitleFont(e.target.value)}
+                      className="w-full bg-gray-700 border border-gray-600 text-white text-xs rounded-lg p-2"
+                    >
+                      {SUBTITLE_FONTS.map(f => <option key={f.id} value={f.id}>{f.label}</option>)}
+                    </select>
+                  </div>
+
+                  {/* Colors */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] text-gray-400 mb-1">Text color</label>
+                      <div className="flex items-center gap-2">
+                        <input type="color" value={subtitleColor} onChange={(e) => setSubtitleColor(e.target.value)} className="w-8 h-8 bg-transparent rounded cursor-pointer border border-gray-600" />
+                        <input type="text" value={subtitleColor} onChange={(e) => setSubtitleColor(e.target.value)} className="flex-1 min-w-0 bg-gray-700 border border-gray-600 text-white text-[11px] rounded p-1.5 font-mono" />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-gray-400 mb-1">Outline color</label>
+                      <div className="flex items-center gap-2">
+                        <input type="color" value={subtitleStrokeColor} onChange={(e) => setSubtitleStrokeColor(e.target.value)} className="w-8 h-8 bg-transparent rounded cursor-pointer border border-gray-600" />
+                        <input type="text" value={subtitleStrokeColor} onChange={(e) => setSubtitleStrokeColor(e.target.value)} className="flex-1 min-w-0 bg-gray-700 border border-gray-600 text-white text-[11px] rounded p-1.5 font-mono" />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Quick color swatches */}
+                  <div className="flex flex-wrap gap-1.5">
+                    {['#FFE81F', '#FFFFFF', '#39FF14', '#00E5FF', '#FF2E88', '#FF3B30', '#FFD54A', '#A855F7', '#FF7A00'].map(c => (
+                      <button
+                        key={c}
+                        onClick={() => setSubtitleColor(c)}
+                        title={c}
+                        className={`w-6 h-6 rounded-full border-2 transition-transform hover:scale-110 ${subtitleColor.toUpperCase() === c ? 'border-white' : 'border-gray-600'}`}
+                        style={{ background: c }}
+                      />
+                    ))}
+                  </div>
+
+                  {/* Outline width */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-[11px] text-gray-400">Outline thickness</label>
+                      <span className="text-[11px] text-indigo-300">{subtitleStrokeWidth}px</span>
+                    </div>
+                    <input
+                      type="range" min={0} max={24} step={1}
+                      value={subtitleStrokeWidth}
+                      onChange={(e) => setSubtitleStrokeWidth(Number(e.target.value))}
+                      className="w-full h-1.5 accent-yellow-500"
+                    />
+                  </div>
+
+                  {/* Font size */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-[11px] text-gray-400">Font size</label>
+                      <span className="text-[11px] text-indigo-300">{subtitleFontSize}px</span>
+                    </div>
+                    <input
+                      type="range" min={24} max={120} step={2}
+                      value={subtitleFontSize}
+                      onChange={(e) => setSubtitleFontSize(Number(e.target.value))}
+                      className="w-full h-1.5 accent-indigo-500"
+                    />
+                  </div>
+
+                  {/* Vertical position */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-[11px] text-gray-400">Vertical position</label>
+                      <span className="text-[11px] text-indigo-300">{subtitlePositionY}%</span>
+                    </div>
+                    <input
+                      type="range" min={10} max={95} step={1}
+                      value={subtitlePositionY}
+                      onChange={(e) => setSubtitlePositionY(Number(e.target.value))}
+                      className="w-full h-1.5 accent-indigo-500"
+                    />
+                  </div>
+
+                  {/* Background style */}
+                  <div>
+                    <label className="block text-[11px] text-gray-400 mb-1">Background</label>
+                    <div className="flex gap-1.5">
+                      {[
+                        { id: 'none', label: 'Transparent' },
+                        { id: 'pill', label: 'Pill' },
+                        { id: 'band', label: 'Bar' },
+                      ].map(opt => (
+                        <button
+                          key={opt.id}
+                          onClick={() => setSubtitleBgStyle(opt.id)}
+                          className={`flex-1 px-2 py-1.5 text-[11px] rounded border transition-colors ${
+                            subtitleBgStyle === opt.id ? 'border-indigo-400 bg-indigo-600/30 text-white' : 'border-gray-700 bg-gray-800/50 text-gray-400 hover:text-white'
+                          }`}
+                        >{opt.label}</button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Toggles */}
+                  <div className="grid grid-cols-1 gap-2 pt-1">
+                    <label className="flex items-center justify-between text-[11px] text-gray-300 cursor-pointer">
+                      <span>UPPERCASE text</span>
+                      <input type="checkbox" checked={subtitleUppercase} onChange={(e) => setSubtitleUppercase(e.target.checked)} className="w-4 h-4 accent-yellow-500 rounded" />
+                    </label>
+                    <label className="flex items-center justify-between text-[11px] text-gray-300 cursor-pointer">
+                      <span>Drop shadow</span>
+                      <input type="checkbox" checked={subtitleShadow} onChange={(e) => setSubtitleShadow(e.target.checked)} className="w-4 h-4 accent-yellow-500 rounded" />
+                    </label>
+                    <label className="flex items-center justify-between text-[11px] text-gray-300 cursor-pointer">
+                      <span>Pop-in animation</span>
+                      <input type="checkbox" checked={subtitlePopIn} onChange={(e) => setSubtitlePopIn(e.target.checked)} className="w-4 h-4 accent-yellow-500 rounded" />
+                    </label>
+                  </div>
                 </div>
               )}
             </div>
@@ -2458,6 +3126,33 @@ const AudioVisualMixer = () => {
                           Live Control Dashboard (Instant Switching!)
                       </h3>
                       <div className="flex items-center gap-4">
+                          <label className={`flex items-center gap-2 text-sm px-3 py-1 rounded font-semibold border cursor-pointer transition-colors
+                              ${manualAutoAdvance ? 'text-orange-300 bg-orange-900/30 border-orange-500/50' : 'text-gray-400 bg-gray-900/40 border-gray-600'}`}
+                              title="Automatically switch to the next clip as soon as the current one finishes">
+                              <input
+                                  type="checkbox"
+                                  checked={manualAutoAdvance}
+                                  onChange={(e) => {
+                                      setManualAutoAdvance(e.target.checked);
+                                      manualChangeTimeRef.current = audioRef.current?.currentTime || 0;
+                                  }}
+                                  className="w-4 h-4 accent-orange-500 rounded cursor-pointer"
+                              />
+                              <SkipForward size={15} /> Auto-Advance
+                          </label>
+                          {manualAutoAdvance && (
+                              <label className={`flex items-center gap-2 text-sm px-3 py-1 rounded font-semibold border cursor-pointer transition-colors
+                                  ${manualAutoLoop ? 'text-orange-300 bg-orange-900/20 border-orange-500/40' : 'text-gray-400 bg-gray-900/40 border-gray-600'}`}
+                                  title="When the last clip finishes, start again from the first one">
+                                  <input
+                                      type="checkbox"
+                                      checked={manualAutoLoop}
+                                      onChange={(e) => setManualAutoLoop(e.target.checked)}
+                                      className="w-4 h-4 accent-orange-500 rounded cursor-pointer"
+                                  />
+                                  <Repeat size={15} /> Loop
+                              </label>
+                          )}
                           <span className="flex items-center gap-1 text-sm text-green-400 bg-green-900/30 px-3 py-1 rounded font-semibold border border-green-500/30">
                               <CheckCircle2 size={16}/> Already Viewed
                           </span>
@@ -2501,6 +3196,282 @@ const AudioVisualMixer = () => {
                   </div>
               </div>
           )}
+
+          {/* ============ YouTube SEO Studio (ChatGPT API) ============ */}
+          <div className="bg-gray-800 p-5 rounded-2xl border-2 border-red-500/40 mt-2 shadow-inner">
+            <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+              <h3 className="text-lg font-bold text-red-400 flex items-center gap-2">
+                <Youtube size={22} /> YouTube SEO Studio
+                <span className="text-xs font-normal text-gray-400">· thumbnail, 100-char title, 3000+ char description, tags</span>
+              </h3>
+              {(seoTitle || seoDescription || seoKeywords) && (
+                <button
+                  onClick={() => { setSeoTitle(''); setSeoDescription(''); setSeoKeywords(''); setThumbImage(''); setThumbError(''); setSeoError(''); setSeoStatus(''); }}
+                  className="text-xs text-gray-400 hover:text-white flex items-center gap-1"
+                >
+                  <RefreshCcw size={13} /> Clear results
+                </button>
+              )}
+            </div>
+
+            {/* API key + models */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
+              <div className="lg:col-span-1">
+                <label className="block text-xs text-gray-400 mb-1 flex items-center gap-1"><KeyRound size={12} /> ChatGPT (OpenAI) API Key</label>
+                <input
+                  type="password"
+                  value={openAiKey}
+                  onChange={(e) => setOpenAiKey(e.target.value)}
+                  placeholder="sk-..."
+                  autoComplete="off"
+                  className="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg focus:ring-red-500 focus:border-red-500 block p-2.5"
+                />
+                <label className="flex items-center gap-2 mt-2 text-[11px] text-gray-400 cursor-pointer">
+                  <input type="checkbox" checked={rememberKey} onChange={(e) => setRememberKey(e.target.checked)} className="w-3.5 h-3.5 accent-red-500 rounded" />
+                  Remember key in this browser (localStorage)
+                </label>
+              </div>
+
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">Text model</label>
+                <select
+                  value={textModel}
+                  onChange={(e) => setTextModel(e.target.value)}
+                  className="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg p-2.5"
+                >
+                  {OPENAI_TEXT_MODELS.map(m => <option key={m} value={m}>{m}</option>)}
+                </select>
+                <input
+                  type="text"
+                  value={customTextModel}
+                  onChange={(e) => setCustomTextModel(e.target.value)}
+                  placeholder="or type any newer model id…"
+                  className="w-full mt-2 bg-gray-900 border border-gray-700 text-white text-xs rounded-lg p-2"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">Image model</label>
+                <select
+                  value={imageModel}
+                  onChange={(e) => setImageModel(e.target.value)}
+                  className="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg p-2.5"
+                >
+                  {OPENAI_IMAGE_MODELS.map(m => <option key={m} value={m}>{m}</option>)}
+                </select>
+                <input
+                  type="text"
+                  value={customImageModel}
+                  onChange={(e) => setCustomImageModel(e.target.value)}
+                  placeholder="or type any newer image model id…"
+                  className="w-full mt-2 bg-gray-900 border border-gray-700 text-white text-xs rounded-lg p-2"
+                />
+              </div>
+            </div>
+
+            {/* Topic */}
+            <div className="mb-4">
+              <label className="block text-xs text-gray-400 mb-1">
+                Video topic / angle <span className="text-gray-600">— the title, subtitles and clip names above are sent automatically as reference</span>
+              </label>
+              <textarea
+                value={seoTopic}
+                onChange={(e) => setSeoTopic(e.target.value)}
+                rows={2}
+                placeholder={videoTitle ? `e.g. deeper angle for "${videoTitle}"` : 'What is this video about? Audience, angle, key points…'}
+                className="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg focus:ring-red-500 focus:border-red-500 block p-2.5 resize-y"
+              />
+              <div className="flex flex-wrap gap-2 mt-2 text-[11px] text-gray-500">
+                <span className={videoTitle ? 'text-green-400' : ''}>{videoTitle ? '✓' : '○'} title</span>
+                <span className={parsedCues.length || subtitleRawText ? 'text-green-400' : ''}>{parsedCues.length || subtitleRawText ? '✓' : '○'} subtitles ({parsedCues.length} cues)</span>
+                <span className={visualAssets.length ? 'text-green-400' : ''}>{visualAssets.length ? '✓' : '○'} {visualAssets.length} clip names</span>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3 mb-4">
+              <button
+                onClick={generateSeoMetadata}
+                disabled={seoLoading || !openAiKey.trim()}
+                className={`flex items-center gap-2 px-5 py-3 rounded-xl font-bold transition-all ${
+                  seoLoading || !openAiKey.trim()
+                    ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
+                    : 'bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-600/20'
+                }`}
+              >
+                {seoLoading ? <Loader2 size={18} className="animate-spin" /> : <Sparkles size={18} />}
+                {seoLoading ? 'Generating…' : 'Generate Title, Description & Keywords'}
+              </button>
+              {seoStatus && <span className="text-xs text-gray-400">{seoStatus}</span>}
+            </div>
+
+            {seoError && (
+              <div className="flex items-start gap-2 text-sm text-red-300 bg-red-950/40 border border-red-500/40 rounded-lg p-3 mb-4">
+                <AlertCircle size={16} className="shrink-0 mt-0.5" /> <span>{seoError}</span>
+              </div>
+            )}
+
+            {/* Results */}
+            {(seoTitle || seoDescription || seoKeywords) && (
+              <div className="space-y-4">
+                {/* Title */}
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs text-gray-400 font-semibold">Title
+                      <span className={`ml-2 font-mono ${seoTitle.length === 100 ? 'text-green-400' : 'text-yellow-400'}`}>{seoTitle.length}/100 chars</span>
+                    </label>
+                    <button onClick={() => copyToClipboard(seoTitle, 'title')} className="flex items-center gap-1 text-xs px-2 py-1 bg-gray-700 hover:bg-red-600 rounded transition-colors">
+                      <Copy size={12} /> {copiedField === 'title' ? 'Copied!' : 'Copy'}
+                    </button>
+                  </div>
+                  <textarea
+                    value={seoTitle}
+                    onChange={(e) => setSeoTitle(e.target.value)}
+                    rows={2}
+                    className="w-full bg-gray-900 border border-gray-700 text-white text-sm rounded-lg p-2.5 font-medium resize-y"
+                  />
+                </div>
+
+                {/* Description */}
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs text-gray-400 font-semibold">Description
+                      <span className={`ml-2 font-mono ${seoDescription.length >= 3000 ? 'text-green-400' : 'text-yellow-400'}`}>{seoDescription.length} chars (min 3000)</span>
+                    </label>
+                    <button onClick={() => copyToClipboard(seoDescription, 'desc')} className="flex items-center gap-1 text-xs px-2 py-1 bg-gray-700 hover:bg-red-600 rounded transition-colors">
+                      <Copy size={12} /> {copiedField === 'desc' ? 'Copied!' : 'Copy'}
+                    </button>
+                  </div>
+                  <textarea
+                    value={seoDescription}
+                    onChange={(e) => setSeoDescription(e.target.value)}
+                    rows={12}
+                    className="w-full bg-gray-900 border border-gray-700 text-gray-200 text-xs rounded-lg p-2.5 font-mono resize-y custom-scrollbar"
+                  />
+                </div>
+
+                {/* Keywords */}
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs text-gray-400 font-semibold">Keywords / Tags
+                      <span className={`ml-2 font-mono ${seoKeywords.length <= 500 ? 'text-green-400' : 'text-red-400'}`}>{seoKeywords.length}/500 chars · {seoKeywords.split(',').filter(k => k.trim()).length} tags</span>
+                    </label>
+                    <button onClick={() => copyToClipboard(seoKeywords, 'keys')} className="flex items-center gap-1 text-xs px-2 py-1 bg-gray-700 hover:bg-red-600 rounded transition-colors">
+                      <Copy size={12} /> {copiedField === 'keys' ? 'Copied!' : 'Copy'}
+                    </button>
+                  </div>
+                  <textarea
+                    value={seoKeywords}
+                    onChange={(e) => setSeoKeywords(e.target.value)}
+                    rows={3}
+                    className="w-full bg-gray-900 border border-gray-700 text-gray-200 text-xs rounded-lg p-2.5 resize-y"
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Thumbnail */}
+            <div className="mt-6 pt-5 border-t border-gray-700">
+              <h4 className="text-sm font-bold text-gray-200 mb-3 flex items-center gap-2">
+                <ImagePlus size={16} className="text-red-400" /> Thumbnail Generator
+              </h4>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                <div>
+                  <div className="mb-3">
+                    <label className="block text-xs text-gray-400 mb-1">Thumbnail style</label>
+                    <select
+                      value={thumbStyle}
+                      onChange={(e) => setThumbStyle(e.target.value)}
+                      className="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg p-2"
+                    >
+                      {Object.entries(THUMB_STYLES).map(([key, st]) => (
+                        <option key={key} value={key}>{st.label}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 mb-3">
+                    <div>
+                      <label className="block text-xs text-gray-400 mb-1">Size</label>
+                      <select value={thumbSize} onChange={(e) => setThumbSize(e.target.value)} className="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg p-2">
+                        {(IMAGE_SIZES[effectiveImageModel] || ['1024x1024']).map(sz => (
+                          <option key={sz} value={sz}>{sz}{sz === '1536x1024' || sz === '1792x1024' ? ' (widescreen)' : ''}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-400 mb-1">Quality</label>
+                      <select value={thumbQuality} onChange={(e) => setThumbQuality(e.target.value)} className="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg p-2">
+                        <option value="high">high</option>
+                        <option value="medium">medium</option>
+                        <option value="low">low</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs text-gray-400 font-semibold">Image prompt (editable)</label>
+                    <div className="flex gap-2">
+                      <button onClick={() => setThumbPrompt(fallbackThumbPrompt())} className="flex items-center gap-1 text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded transition-colors">
+                        <Wand2 size={12} /> Build locally
+                      </button>
+                      <button onClick={() => copyToClipboard(thumbPrompt || fallbackThumbPrompt(), 'prompt')} className="flex items-center gap-1 text-xs px-2 py-1 bg-gray-700 hover:bg-red-600 rounded transition-colors">
+                        <Copy size={12} /> {copiedField === 'prompt' ? 'Copied!' : 'Copy'}
+                      </button>
+                    </div>
+                  </div>
+                  <textarea
+                    value={thumbPrompt}
+                    onChange={(e) => setThumbPrompt(e.target.value)}
+                    rows={7}
+                    placeholder="Generate the metadata first, or click “Build locally” to compose a prompt from the title and topic."
+                    className="w-full bg-gray-900 border border-gray-700 text-gray-200 text-xs rounded-lg p-2.5 resize-y"
+                  />
+
+                  <button
+                    onClick={generateThumbnail}
+                    disabled={thumbLoading || !openAiKey.trim()}
+                    className={`mt-3 w-full flex items-center justify-center gap-2 px-5 py-3 rounded-xl font-bold transition-all ${
+                      thumbLoading || !openAiKey.trim()
+                        ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
+                        : 'bg-purple-600 hover:bg-purple-500 text-white shadow-lg shadow-purple-600/20'
+                    }`}
+                  >
+                    {thumbLoading ? <Loader2 size={18} className="animate-spin" /> : <ImageIcon size={18} />}
+                    {thumbLoading ? 'Painting thumbnail…' : `Generate Thumbnail (${effectiveImageModel})`}
+                  </button>
+
+                  {thumbError && (
+                    <div className="mt-3 flex items-start gap-2 text-xs text-yellow-200 bg-yellow-950/40 border border-yellow-500/40 rounded-lg p-3">
+                      <AlertCircle size={14} className="shrink-0 mt-0.5" />
+                      <span>{thumbError}</span>
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <div className="aspect-video w-full bg-black rounded-xl border border-gray-700 overflow-hidden flex items-center justify-center">
+                    {thumbImage ? (
+                      <img src={thumbImage} alt="Generated YouTube thumbnail" className="w-full h-full object-contain" />
+                    ) : (
+                      <div className="text-center text-gray-600 text-xs px-6">
+                        {thumbLoading ? <Loader2 size={26} className="animate-spin mx-auto text-purple-400" /> : <ImageIcon size={26} className="mx-auto mb-2" />}
+                        <p className="mt-2">Your generated 16:9 thumbnail appears here.</p>
+                      </div>
+                    )}
+                  </div>
+                  {thumbHeadline && (
+                    <p className="text-[11px] text-gray-400 mt-2">Thumbnail headline: <span className="text-white font-bold">{thumbHeadline}</span></p>
+                  )}
+                  {thumbImage && (
+                    <button onClick={downloadThumbnail} className="mt-3 w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-green-600 hover:bg-green-500 text-white rounded-lg font-semibold transition-colors">
+                      <Download size={16} /> Download Thumbnail PNG
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
 
         </div>
 
