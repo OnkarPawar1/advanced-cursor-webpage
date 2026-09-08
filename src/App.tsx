@@ -1,5 +1,9 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Upload, Play, Pause, Download, Trash2, Film, Music, Image as ImageIcon, RefreshCcw, Shuffle, AlertCircle, VolumeX, Volume2, FileText, Loader2, Video, Clock, Layers, Dices, Sparkles, Type, Tv, ImagePlus, Move, MousePointerClick, SkipBack, SkipForward, LayoutGrid, CheckCircle2, Pencil, Highlighter, MousePointer2, Eraser, Zap, CircleDot, ZoomIn, ScanSearch, Copy, KeyRound, Wand2, Youtube, Repeat } from 'lucide-react';
+import { Upload, Play, Pause, Download, Trash2, Film, Music, Image as ImageIcon, RefreshCcw, Shuffle, AlertCircle, VolumeX, Volume2, FileText, Loader2, Video, Clock, Layers, Dices, Sparkles, Type, Tv, ImagePlus, Move, MousePointerClick, SkipBack, SkipForward, LayoutGrid, CheckCircle2, Pencil, Highlighter, MousePointer2, Eraser, Zap, CircleDot, ZoomIn, ScanSearch, Copy, KeyRound, Wand2, Youtube, Repeat, Server, Cpu, Gauge, XCircle } from 'lucide-react';
+
+const configuredRenderApi = String(import.meta.env.VITE_RENDER_API_URL || '').replace(/\/$/, '');
+const RENDER_API_BASE = configuredRenderApi || (window.location.hostname.endsWith('github.io') ? 'http://127.0.0.1:4178' : '');
+const renderApiUrl = (path) => `${RENDER_API_BASE}${path}`;
 
 const AudioVisualMixer = () => {
   // State
@@ -9,6 +13,15 @@ const AudioVisualMixer = () => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isRendering, setIsRendering] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+
+  // Production FFmpeg renderer (local companion service on macOS)
+  const [renderService, setRenderService] = useState({ status: 'checking', capabilities: null, error: '' });
+  const [productionPreset, setProductionPreset] = useState('high-quality');
+  const [productionResolution, setProductionResolution] = useState('1920x1080');
+  const [productionFps, setProductionFps] = useState(30);
+  const [normalizeProductionAudio, setNormalizeProductionAudio] = useState(false);
+  const [productionJob, setProductionJob] = useState({ id: '', status: 'idle', progress: 0, error: '', downloadUrl: '', filename: '' });
+  const [, setPresenterCaptureRevision] = useState(0);
   
   // Settings
   const [useShuffle, setUseShuffle] = useState(false);
@@ -195,6 +208,10 @@ STYLE: bright, clean, high key, lots of white space, sharp vector-meets-3D-rende
   const lastTrailSampleRef = useRef(0);
   const overviewCanvasRef = useRef(null);
   const offscreenCanvasRef = useRef(null); // snapshot canvas for focus-wide zoom
+  const productionPollTimerRef = useRef(null);
+  const productionUploadAbortRef = useRef(null);
+  const presenterCaptureRef = useRef({ pointerEvents: [], strokes: [] });
+  const lastPresenterCaptureTimeRef = useRef(-1);
 
   const TRANSITION_DURATION = 1.5; 
 
@@ -203,6 +220,40 @@ STYLE: bright, clean, high key, lots of white space, sharp vector-meets-3D-rende
     'slide-down', 'zoom', 'zoom-out', 'spin', 'iris-open', 
     'iris-close', 'clock-wipe', 'curtains', 'blinds'
   ];
+
+  const productionBusy = ['uploading', 'queued', 'running', 'cancelling'].includes(productionJob.status);
+
+  const checkRenderService = async () => {
+    setRenderService(prev => ({ ...prev, status: 'checking', error: '' }));
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3000);
+    try {
+      const response = await fetch(renderApiUrl('/api/health'), { signal: controller.signal });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || body.status !== 'ready') {
+        const missing = body?.capabilities?.missing;
+        const reason = Array.isArray(missing) && missing.length > 0 ? `FFmpeg is missing: ${missing.join(', ')}` : '';
+        throw new Error(body?.capabilities?.error || body?.error || reason || 'Renderer is not ready');
+      }
+      setRenderService({ status: 'ready', capabilities: body.capabilities, error: '' });
+    } catch (error) {
+      setRenderService({
+        status: 'offline',
+        capabilities: null,
+        error: error.name === 'AbortError' ? 'Local renderer did not respond' : (error.message || 'Local renderer is offline'),
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+  };
+
+  useEffect(() => {
+    checkRenderService();
+    return () => {
+      if (productionPollTimerRef.current) clearTimeout(productionPollTimerRef.current);
+      productionUploadAbortRef.current?.abort();
+    };
+  }, []);
 
   // --- PDF Helper Functions ---
 
@@ -893,6 +944,35 @@ STYLE: bright, clean, high key, lots of white space, sharp vector-meets-3D-rende
     }
   };
 
+  const capturePresenterPoint = (point, force = false, visible = true) => {
+    const audio = audioRef.current;
+    const canvas = canvasRef.current;
+    if (!audio || !canvas || audio.paused || audio.ended) return;
+    const time = audio.currentTime;
+    if (!force && lastPresenterCaptureTimeRef.current >= 0 && time - lastPresenterCaptureTimeRef.current < 0.05) return;
+    if (lastPresenterCaptureTimeRef.current > time + 0.25) resetPresenterCapture();
+    lastPresenterCaptureTimeRef.current = time;
+    presenterCaptureRef.current.pointerEvents.push({
+      time,
+      x: Math.max(0, Math.min(1, point.x / canvas.width)),
+      y: Math.max(0, Math.min(1, point.y / canvas.height)),
+      visible,
+      mode: stateRefs.current.interactionMode,
+      style: stateRefs.current.cursorStyle,
+      color: stateRefs.current.interactionMode === 'laser' ? '#FF2D55' : stateRefs.current.penColor,
+      size: stateRefs.current.cursorSize,
+    });
+    if (presenterCaptureRef.current.pointerEvents.length > 250_000) {
+      presenterCaptureRef.current.pointerEvents.splice(0, presenterCaptureRef.current.pointerEvents.length - 250_000);
+    }
+  };
+
+  const resetPresenterCapture = () => {
+    presenterCaptureRef.current = { pointerEvents: [], strokes: [] };
+    lastPresenterCaptureTimeRef.current = -1;
+    setPresenterCaptureRevision(value => value + 1);
+  };
+
   const handleCanvasPointerMove = (event) => {
     const point = getCanvasPoint(event);
     if (!point) return;
@@ -902,6 +982,7 @@ STYLE: bright, clean, high key, lots of white space, sharp vector-meets-3D-rende
     pointerRef.current.visible = true;
     pointerRef.current.lastMove = now;
     pushTrailPoint(point.x, point.y, now);
+    capturePresenterPoint(point);
 
     if (pointerRef.current.down && (stateRefs.current.interactionMode === 'pen' || stateRefs.current.interactionMode === 'highlight')) {
       addStrokePoint(point, now);
@@ -914,6 +995,7 @@ STYLE: bright, clean, high key, lots of white space, sharp vector-meets-3D-rende
     const now = performance.now();
     pointerRef.current = { ...pointerRef.current, x: point.x, y: point.y, visible: true, down: true, lastMove: now };
     pushTrailPoint(point.x, point.y, now);
+    capturePresenterPoint(point, true);
 
     clickBurstsRef.current.push({ x: point.x, y: point.y, born: now });
     if (clickBurstsRef.current.length > 12) clickBurstsRef.current.shift();
@@ -928,6 +1010,7 @@ STYLE: bright, clean, high key, lots of white space, sharp vector-meets-3D-rende
         finishedAt: null,
         color: stateRefs.current.penColor,
         width: mode === 'highlight' ? stateRefs.current.highlightWidth : stateRefs.current.penWidth,
+        captureStart: audioRef.current && !audioRef.current.paused ? audioRef.current.currentTime : null,
       };
       drawingStrokesRef.current.push(stroke);
       activeStrokeRef.current = stroke;
@@ -939,10 +1022,34 @@ STYLE: bright, clean, high key, lots of white space, sharp vector-meets-3D-rende
     }
   };
 
+  const handleCanvasPointerLeave = () => {
+    if (!pointerRef.current.down && stateRefs.current.cursorStyle !== 'focus-wide') {
+      pointerRef.current.visible = false;
+      capturePresenterPoint(pointerRef.current, true, false);
+    }
+  };
+
   const finishCanvasStroke = (event) => {
     pointerRef.current.down = false;
     if (activeStrokeRef.current) {
-      activeStrokeRef.current.finishedAt = performance.now();
+      const stroke = activeStrokeRef.current;
+      stroke.finishedAt = performance.now();
+      if (stroke.captureStart !== null && stroke.points.length > 0 && canvasRef.current) {
+        const end = Math.max(stroke.captureStart, audioRef.current?.currentTime || stroke.captureStart);
+        presenterCaptureRef.current.strokes.push({
+          start: stroke.captureStart,
+          end,
+          visibleUntil: autoHideDrawings ? Math.min(audioDuration, end + drawingLifetime + 1.25) : audioDuration,
+          type: stroke.type,
+          color: stroke.color,
+          width: stroke.width,
+          points: stroke.points.map(point => ({
+            x: Math.max(0, Math.min(1, point.x / canvasRef.current.width)),
+            y: Math.max(0, Math.min(1, point.y / canvasRef.current.height)),
+          })),
+        });
+        setPresenterCaptureRevision(value => value + 1);
+      }
       activeStrokeRef.current = null;
     }
     if (event?.currentTarget?.releasePointerCapture) {
@@ -951,9 +1058,18 @@ STYLE: bright, clean, high key, lots of white space, sharp vector-meets-3D-rende
   };
 
   const clearPresenterDrawings = () => {
+    const clearTime = audioRef.current?.currentTime;
+    if (Number.isFinite(clearTime)) {
+      presenterCaptureRef.current.strokes.forEach((stroke) => {
+        if (stroke.start <= clearTime && (stroke.visibleUntil === undefined || stroke.visibleUntil > clearTime)) {
+          stroke.visibleUntil = clearTime;
+        }
+      });
+    }
     drawingStrokesRef.current = [];
     activeStrokeRef.current = null;
     clickBurstsRef.current = [];
+    setPresenterCaptureRevision(value => value + 1);
   };
 
   const drawSmoothPath = (ctx, points) => {
@@ -1787,6 +1903,9 @@ STYLE: bright, clean, high key, lots of white space, sharp vector-meets-3D-rende
           audioRef.current.currentTime = 0;
           manualChangeTimeRef.current = 0;
       }
+      if (audioRef.current.currentTime < 0.05 && (presenterCaptureRef.current.pointerEvents.length > 0 || presenterCaptureRef.current.strokes.length > 0)) {
+          resetPresenterCapture();
+      }
       audioRef.current.play();
       setIsPlaying(true);
     }
@@ -1815,6 +1934,188 @@ STYLE: bright, clean, high key, lots of white space, sharp vector-meets-3D-rende
 
   const handleNextManual = () => {
       if (manualAssetIndex < activeAssets.length - 1) handleSelectManual(manualAssetIndex + 1);
+  };
+
+  const materializeAssetFile = async (asset, index) => {
+    if (asset.file) return asset.file;
+    const response = await fetch(asset.url);
+    if (!response.ok) throw new Error(`Could not prepare ${asset.name} for FFmpeg.`);
+    const blob = await response.blob();
+    const extension = blob.type.includes('png') ? 'png' : blob.type.includes('webp') ? 'webp' : 'jpg';
+    return new File([blob], `generated_asset_${index + 1}.${extension}`, { type: blob.type || 'image/jpeg' });
+  };
+
+  const pollProductionJob = async (jobId) => {
+    try {
+      const response = await fetch(renderApiUrl(`/api/renders/${jobId}`), { cache: 'no-store' });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Could not read render progress.');
+      const job = data.job;
+      setProductionJob(previous => ({
+        ...previous,
+        id: job.id,
+        status: job.status,
+        progress: job.progress || 0,
+        error: job.error || '',
+        filename: job.filename || previous.filename,
+        downloadUrl: job.status === 'completed' ? renderApiUrl(data.downloadUrl || `/api/renders/${job.id}/download`) : '',
+      }));
+      if (job.status === 'queued' || job.status === 'running') {
+        productionPollTimerRef.current = window.setTimeout(() => pollProductionJob(jobId), 900);
+      }
+    } catch (error) {
+      setProductionJob(previous => ({ ...previous, status: 'failed', error: error.message || 'Lost connection to the render service.' }));
+    }
+  };
+
+  const startProductionRender = async () => {
+    if (!audioFile?.file || timeline.length === 0 || renderService.status !== 'ready') return;
+    if (isManualMode) {
+      setProductionJob(previous => ({ ...previous, status: 'failed', error: 'Turn off Live Manual Control for deterministic FFmpeg export. Use Live WebM Capture for manual switching.' }));
+      return;
+    }
+    if (showWatermark && watermarkType === 'image' && !watermarkImage?.file) {
+      setProductionJob(previous => ({ ...previous, status: 'failed', error: 'Choose a watermark logo image before starting the FFmpeg export.' }));
+      return;
+    }
+    if (productionPollTimerRef.current) window.clearTimeout(productionPollTimerRef.current);
+    const controller = new AbortController();
+    productionUploadAbortRef.current = controller;
+    setProductionJob({ id: '', status: 'uploading', progress: 0, error: '', downloadUrl: '', filename: '' });
+
+    try {
+      const usedAssets = [];
+      const assetIndexes = new Map();
+      for (const segment of timeline) {
+        if (!assetIndexes.has(segment.asset.id)) {
+          assetIndexes.set(segment.asset.id, usedAssets.length);
+          usedAssets.push(segment.asset);
+        }
+      }
+
+      const form = new FormData();
+      form.append('audio', audioFile.file, audioFile.name);
+      for (let index = 0; index < usedAssets.length; index += 1) {
+        const file = await materializeAssetFile(usedAssets[index], index);
+        form.append(`asset_${index}`, file, file.name);
+      }
+      if (showWatermark && watermarkType === 'image' && watermarkImage?.file) {
+        form.append('logo', watermarkImage.file, watermarkImage.name);
+      }
+
+      const [width, height] = productionResolution.split('x').map(Number);
+      const captured = presenterCaptureRef.current;
+      const project = {
+        version: 1,
+        title: videoTitle.trim() || 'mixed-video',
+        duration: audioDuration,
+        audioField: 'audio',
+        assets: usedAssets.map((asset, index) => ({
+          id: asset.id,
+          field: `asset_${index}`,
+          name: asset.name,
+          type: asset.type,
+          duration: asset.duration || 0,
+        })),
+        timeline: timeline.map(segment => ({
+          assetIndex: assetIndexes.get(segment.asset.id),
+          startTime: segment.startTime,
+          endTime: segment.endTime,
+          transitionEffect: segment.transitionEffect || 'none',
+          imgAnim: enableImageAnimations ? (segment.imgAnim || 'none') : 'none',
+        })),
+        transitionDuration: TRANSITION_DURATION,
+        enableImageAnimations,
+        output: {
+          width,
+          height,
+          fps: productionFps,
+          preset: productionPreset,
+          normalizeAudio: normalizeProductionAudio,
+        },
+        subtitles: {
+          enabled: showSubtitles && parsedCues.length > 0,
+          cues: parsedCues.filter(cue => cue.start < audioDuration).map(cue => ({ ...cue, end: Math.min(cue.end, audioDuration) })),
+          font: subtitleFont,
+          fontSize: subtitleFontSize,
+          color: subtitleColor,
+          strokeColor: subtitleStrokeColor,
+          strokeWidth: subtitleStrokeWidth,
+          background: subtitleBgStyle,
+          shadow: subtitleShadow,
+          uppercase: subtitleUppercase,
+          popIn: subtitlePopIn,
+          positionY: subtitlePositionY,
+        },
+        watermark: !showWatermark
+          ? { enabled: false, type: 'none' }
+          : watermarkType === 'image'
+            ? { enabled: true, type: 'image', field: 'logo' }
+            : { enabled: true, type: 'text', text: channelName.trim() || 'Creator' },
+        presenter: {
+          enabled: (showAnimatedCursor && captured.pointerEvents.length > 0) || captured.strokes.length > 0,
+          pointerEvents: showAnimatedCursor
+            ? captured.pointerEvents.filter(event => event.time <= audioDuration).sort((a, b) => a.time - b.time)
+            : [],
+          strokes: captured.strokes.filter(stroke => stroke.start <= audioDuration && (stroke.visibleUntil ?? stroke.end) > stroke.start),
+        },
+      };
+      form.append('project', JSON.stringify(project));
+
+      const response = await fetch(renderApiUrl('/api/renders'), {
+        method: 'POST',
+        body: form,
+        signal: controller.signal,
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const details = Array.isArray(data.details) ? ` ${data.details.map(item => `${item.path}: ${item.message}`).join('; ')}` : '';
+        throw new Error(`${data.error || 'The render service rejected the project.'}${details}`);
+      }
+      setProductionJob({
+        id: data.job.id,
+        status: data.job.status,
+        progress: data.job.progress || 0,
+        error: '',
+        downloadUrl: '',
+        filename: data.job.filename || '',
+      });
+      void pollProductionJob(data.job.id);
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        setProductionJob({ id: '', status: 'cancelled', progress: 0, error: '', downloadUrl: '', filename: '' });
+      } else {
+        setProductionJob(previous => ({ ...previous, status: 'failed', error: error.message || 'Could not start the FFmpeg render.' }));
+      }
+    } finally {
+      productionUploadAbortRef.current = null;
+    }
+  };
+
+  const cancelProductionRender = async () => {
+    if (productionJob.status === 'uploading') {
+      productionUploadAbortRef.current?.abort();
+      return;
+    }
+    if (!productionJob.id) return;
+    setProductionJob(previous => ({ ...previous, status: 'cancelling' }));
+    try {
+      await fetch(renderApiUrl(`/api/renders/${productionJob.id}`), { method: 'DELETE' });
+      if (productionPollTimerRef.current) window.clearTimeout(productionPollTimerRef.current);
+      setProductionJob(previous => ({ ...previous, status: 'cancelled', progress: 0 }));
+    } catch (error) {
+      setProductionJob(previous => ({ ...previous, status: 'failed', error: error.message || 'Could not cancel the render.' }));
+    }
+  };
+
+  const downloadProductionRender = () => {
+    if (!productionJob.downloadUrl) return;
+    const anchor = document.createElement('a');
+    anchor.href = productionJob.downloadUrl;
+    anchor.download = productionJob.filename || '';
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
   };
 
   const startRendering = () => {
@@ -2997,7 +3298,7 @@ The headline text drawn in the image must read exactly: "${headline}".`;
                 onPointerUp={finishCanvasStroke}
                 onPointerCancel={finishCanvasStroke}
                 onPointerEnter={(e) => { handleCanvasPointerMove(e); pointerRef.current.visible = true; }}
-                onPointerLeave={() => { if (!pointerRef.current.down && cursorStyle !== 'focus-wide') pointerRef.current.visible = false; }}
+                onPointerLeave={handleCanvasPointerLeave}
                 className="w-full h-full object-contain select-none"
                 style={{ cursor: showAnimatedCursor ? 'none' : (interactionMode === 'pen' || interactionMode === 'highlight' || interactionMode === 'zoom' ? 'crosshair' : 'default'), touchAction: 'none' }}
              />
@@ -3096,25 +3397,141 @@ The headline text drawn in the image must read exactly: "${headline}".`;
              </div>
           </div>
 
-          <div className="flex justify-end">
-            <button 
-               onClick={startRendering}
-               disabled={!audioFile || activeAssets.length === 0 || isRendering}
-               className={`flex items-center gap-3 px-8 py-4 text-lg rounded-xl font-bold transition-all
-                 ${!audioFile || activeAssets.length === 0 || isRendering
-                    ? 'bg-gray-800 text-gray-500 cursor-not-allowed border border-gray-700'
-                    : 'bg-green-600 hover:bg-green-500 text-white shadow-lg shadow-green-600/20'
-                 }`}
-            >
-               {isRendering ? (
-                   <>{isManualMode ? 'Recording Live...' : 'Processing...'}</>
-               ) : (
-                   <>
-                       <Download size={22} />
-                       {isManualMode ? 'Record Live & Download' : 'Render & Download Video'}
-                   </>
-               )}
-            </button>
+          <div className="bg-gray-800 p-5 rounded-2xl border-2 border-cyan-500/35 shadow-inner">
+            <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+              <div>
+                <h3 className="text-lg font-bold text-cyan-300 flex items-center gap-2">
+                  <Server size={20} /> Production FFmpeg Export
+                </h3>
+                <p className="text-xs text-gray-400 mt-1">Native MP4/MOV rendering—no real-time screen capture or browser bitrate limit.</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${
+                  renderService.status === 'ready'
+                    ? 'text-green-300 bg-green-950/50 border-green-500/40'
+                    : renderService.status === 'checking'
+                      ? 'text-yellow-300 bg-yellow-950/40 border-yellow-500/30'
+                      : 'text-red-300 bg-red-950/40 border-red-500/30'
+                }`}>
+                  {renderService.status === 'ready' ? '● FFmpeg ready' : renderService.status === 'checking' ? '● Checking service' : '● Service offline'}
+                </span>
+                {renderService.status !== 'ready' && (
+                  <button type="button" onClick={checkRenderService} className="text-xs px-2.5 py-1 rounded bg-gray-700 hover:bg-cyan-700 text-gray-200 transition-colors">
+                    Retry
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {renderService.status === 'unavailable' || renderService.status === 'offline' ? (
+              <div className="mb-4 bg-gray-900/70 border border-gray-700 rounded-lg p-3 text-xs text-gray-300">
+                Start the local Mac renderer with <code className="text-cyan-300 bg-black/40 px-1.5 py-0.5 rounded">npm run start:production</code>, then click Retry.
+                {renderService.error && <span className="block text-red-300 mt-1">{renderService.error}</span>}
+              </div>
+            ) : null}
+
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+              <div>
+                <label className="block text-[11px] text-gray-400 mb-1">Quality preset</label>
+                <select value={productionPreset} onChange={event => setProductionPreset(event.target.value)} disabled={productionBusy} className="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg p-2.5 disabled:opacity-60">
+                  <option value="high-quality" disabled={renderService.status === 'ready' && !renderService.capabilities?.encoders?.libx264}>High Quality · H.264 CRF 17</option>
+                  <option value="balanced" disabled={renderService.status === 'ready' && !renderService.capabilities?.encoders?.libx264}>Balanced · H.264 CRF 20</option>
+                  <option value="apple-silicon" disabled={renderService.status === 'ready' && !renderService.capabilities?.encoders?.h264Videotoolbox}>Apple Silicon · Fast Hardware</option>
+                  <option value="prores-master" disabled={renderService.status === 'ready' && !renderService.capabilities?.encoders?.proresKs}>ProRes 422 HQ Master</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-[11px] text-gray-400 mb-1">Resolution</label>
+                <select value={productionResolution} onChange={event => setProductionResolution(event.target.value)} disabled={productionBusy} className="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg p-2.5 disabled:opacity-60">
+                  <option value="1280x720">720p</option>
+                  <option value="1920x1080">1080p Full HD</option>
+                  <option value="3840x2160">2160p 4K</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-[11px] text-gray-400 mb-1">Frame rate</label>
+                <select value={productionFps} onChange={event => setProductionFps(Number(event.target.value))} disabled={productionBusy} className="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg p-2.5 disabled:opacity-60">
+                  {[24, 25, 30, 50, 60].map(fps => <option key={fps} value={fps}>{fps} FPS</option>)}
+                </select>
+              </div>
+              <label className="flex items-center gap-2 bg-gray-900/60 border border-gray-700 rounded-lg px-3 min-h-[42px] mt-[18px] cursor-pointer">
+                <input type="checkbox" checked={normalizeProductionAudio} onChange={event => setNormalizeProductionAudio(event.target.checked)} disabled={productionBusy} className="w-4 h-4 accent-cyan-500" />
+                <span className="text-xs text-gray-300">Normalize to −14 LUFS</span>
+              </label>
+            </div>
+
+            <div className="flex items-center justify-between gap-3 flex-wrap mt-4 pt-4 border-t border-gray-700">
+              <div className="text-[11px] text-gray-400">
+                <span className="text-cyan-300 font-semibold">Captured Presenter FX:</span>{' '}
+                {presenterCaptureRef.current.pointerEvents.length} pointer samples · {presenterCaptureRef.current.strokes.length} strokes
+                {(presenterCaptureRef.current.pointerEvents.length > 0 || presenterCaptureRef.current.strokes.length > 0) && (
+                  <button type="button" onClick={resetPresenterCapture} disabled={productionBusy} className="ml-2 text-red-300 hover:text-red-200 underline disabled:opacity-50">Reset</button>
+                )}
+                <span className="block text-gray-500 mt-0.5">Play the preview once to capture timed cursor and ink. Zoom Lens and manual clip switching remain available through Live WebM Capture.</span>
+              </div>
+              <div className="flex items-center gap-2">
+                {productionJob.status === 'completed' && (
+                  <button type="button" onClick={downloadProductionRender} className="flex items-center gap-2 px-5 py-3 rounded-xl font-bold bg-green-600 hover:bg-green-500 text-white shadow-lg shadow-green-600/20">
+                    <Download size={18} /> Download {productionJob.filename.endsWith('.mov') ? 'MOV' : 'MP4'}
+                  </button>
+                )}
+                {productionBusy ? (
+                  <button type="button" onClick={cancelProductionRender} className="flex items-center gap-2 px-5 py-3 rounded-xl font-bold bg-red-700 hover:bg-red-600 text-white">
+                    <XCircle size={18} /> Cancel
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={startProductionRender}
+                    disabled={!audioFile || activeAssets.length === 0 || isRendering || isManualMode || renderService.status !== 'ready'}
+                    className={`flex items-center gap-2 px-6 py-3 rounded-xl font-bold transition-all ${
+                      !audioFile || activeAssets.length === 0 || isRendering || isManualMode || renderService.status !== 'ready'
+                        ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
+                        : 'bg-cyan-600 hover:bg-cyan-500 text-white shadow-lg shadow-cyan-600/20'
+                    }`}
+                  >
+                    <Gauge size={19} /> Render High Quality
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {isManualMode && <p className="text-xs text-orange-300 mt-3">Turn off Live Manual Control to use deterministic FFmpeg export.</p>}
+            {productionJob.status !== 'idle' && productionJob.status !== 'completed' && productionJob.status !== 'failed' && productionJob.status !== 'cancelled' && (
+              <div className="mt-4">
+                <div className="flex justify-between text-xs text-gray-300 mb-1">
+                  <span className="capitalize">{productionJob.status === 'uploading' ? 'Preparing and uploading local media' : productionJob.status}</span>
+                  <span>{Math.round(productionJob.progress)}%</span>
+                </div>
+                <div className="h-2.5 bg-gray-900 rounded-full overflow-hidden">
+                  <div className="h-full bg-gradient-to-r from-cyan-500 to-indigo-500 transition-all duration-300" style={{ width: `${Math.max(2, productionJob.progress)}%` }} />
+                </div>
+              </div>
+            )}
+            {productionJob.error && (
+              <div className="mt-3 flex items-start gap-2 text-xs text-red-300 bg-red-950/40 border border-red-500/30 rounded-lg p-3">
+                <AlertCircle size={15} className="shrink-0 mt-0.5" /> {productionJob.error}
+              </div>
+            )}
+
+            <div className="mt-4 pt-4 border-t border-gray-700 flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <p className="text-xs font-semibold text-gray-300 flex items-center gap-1.5"><Cpu size={14} /> Live browser fallback</p>
+                <p className="text-[11px] text-gray-500">Use for manual switching or the interactive magnifier.</p>
+              </div>
+              <button
+                onClick={startRendering}
+                disabled={!audioFile || activeAssets.length === 0 || isRendering || productionBusy}
+                className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${
+                  !audioFile || activeAssets.length === 0 || isRendering || productionBusy
+                    ? 'bg-gray-900 text-gray-600 cursor-not-allowed border border-gray-700'
+                    : 'bg-gray-700 hover:bg-gray-600 text-gray-200 border border-gray-600'
+                }`}
+              >
+                {isRendering ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
+                {isRendering ? 'Recording Live…' : 'Live WebM Capture'}
+              </button>
+            </div>
           </div>
 
           {/* Manual Mode Filmstrip */}

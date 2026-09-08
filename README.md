@@ -1,6 +1,6 @@
 # 🎬 Advanced Presenter FX — AV Mixer
 
-> A powerful, browser-based Audio-Visual mixer that lets you sync images, videos, and PDF slides to an audio/video track — with subtitle overlays, custom watermarks, animated presenter effects, and one-click video export. No installations, no cloud uploads — everything runs entirely in your browser.
+> A powerful Audio-Visual creator studio that lets you sync images, videos, and PDF slides to an audio/video track — with subtitle overlays, custom watermarks, animated presenter effects, AI-assisted publishing, and production-grade FFmpeg export. The editor works in a browser; the optional local macOS renderer keeps media private while producing high-quality MP4 or ProRes files.
 
 **🔗 Live Demo:** [https://onkarpawar1.github.io/advanced-cursor-webpage/](https://onkarpawar1.github.io/advanced-cursor-webpage/)
 
@@ -20,14 +20,30 @@
 | 🎨 **Presenter FX** | Animated cursor (whisk, comet, neon, spotlight, focus-wide), pen, highlighter, laser pointer |
 | 🔍 **Zoom Lens** | Circle or rectangle magnifier that follows your cursor |
 | 🗺️ **Scene Overview** | Corner mini-map panel showing full canvas contents |
-| 📹 **Export** | One-click video recording (WebM) with all FX burned in |
+| 📹 **Export** | Production FFmpeg MP4/MOV with progress and cancellation, plus Live WebM fallback |
 
 ---
 
 ## 🚀 Getting Started
 
 ### Prerequisites
-- Node.js 18+ and npm
+- Node.js 20+ and npm
+- FFmpeg and ffprobe for production export
+
+### Recommended macOS Setup
+
+The local renderer is the fastest and most private way to use the full application. It binds only to `127.0.0.1`; source media is written to an isolated temporary job directory and never uploaded to a cloud service.
+
+```bash
+git clone https://github.com/OnkarPawar1/advanced-cursor-webpage.git
+cd advanced-cursor-webpage
+npm run setup:mac
+npm start
+```
+
+Open **http://127.0.0.1:4178**. The same Node process serves the built React application and the FFmpeg API, avoiding cross-origin or mixed-content problems.
+
+You can also double-click `scripts/start-macos.command` after cloning. On Apple Silicon, choose **Apple Silicon · Fast Hardware** to use `h264_videotoolbox`; choose **High Quality** for better compression quality or **ProRes 422 HQ Master** for editing.
 
 ### Local Development
 
@@ -39,11 +55,17 @@ cd advanced-cursor-webpage
 # 2. Install dependencies
 npm install
 
-# 3. Start the dev server
-npm run dev
+# 3. Start Vite and the local FFmpeg service together
+npm run dev:all
 ```
 
 Open [http://localhost:5173](http://localhost:5173) in your browser.
+
+To check the installed FFmpeg capabilities:
+
+```bash
+npm run check:ffmpeg
+```
 
 ### Production Build
 
@@ -177,12 +199,15 @@ A corner mini-map panel shows the full canvas contents at a glance.
 ---
 
 ### Step 6 — Export Video
-1. Click **▶ Play** to preview your creation
-2. When satisfied, click **⬇ Export Video**
-3. The recording starts automatically — all FX, subtitles, watermarks, and transitions are burned in
-4. When the audio ends, a `.webm` video file downloads automatically
+1. Click **▶ Play** to preview the creation. Cursor and drawing gestures made during preview are captured with media timestamps.
+2. In **Production FFmpeg Export**, select 720p, 1080p, or 4K; 24–60 FPS; and a quality preset.
+3. Optionally enable −14 LUFS audio normalization.
+4. Click **Render High Quality**. Upload preparation, queued/running state, percentage progress, cancellation, and errors remain visible in the interface.
+5. Download the completed `.mp4` or `.mov` file.
 
-> 💡 Tip: Make sure the canvas is fully visible during recording for best results.
+Use **Live WebM Capture** when manual clip switching or the interactive Zoom Lens must be recorded. Production export supports the automatic timeline, all 14 mapped transitions, Ken Burns motion, subtitles, watermarks, and captured pointer/ink overlays.
+
+Detailed architecture, API, security defaults and preset behavior are documented in [`docs/FFMPEG_RENDERER.md`](docs/FFMPEG_RENDERER.md).
 
 ---
 
@@ -248,9 +273,11 @@ Under **Project Details → Watermark**:
 | Styling | Tailwind CSS |
 | Icons | Lucide React |
 | PDF Rendering | PDF.js (CDN, loaded on demand) |
-| Video Export | `MediaRecorder` API + `HTMLCanvasElement.captureStream()` |
+| Live Export Fallback | `MediaRecorder` API + `HTMLCanvasElement.captureStream()` |
+| Production Render API | Node.js 20 + Express 5 + Multer + Zod |
+| Production Video Engine | FFmpeg + ffprobe (`libx264`, VideoToolbox, ProRes, libass) |
 | Subtitles | Custom WEBVTT parser (no dependencies) |
-| Deployment | GitHub Pages via GitHub Actions |
+| Deployment | GitHub Pages demo + local Node production service |
 
 ---
 
@@ -258,14 +285,22 @@ Under **Project Details → Watermark**:
 
 ```
 advanced-cursor-webpage/
-├── public/                  # Static assets
 ├── src/
 │   ├── App.tsx              # Main component (entire app logic + canvas rendering)
 │   ├── index.css            # Global styles + custom scrollbar
 │   └── main.tsx             # React entry point
+├── server/
+│   ├── index.mjs            # Local API, upload handling and secure file delivery
+│   ├── ffmpeg.mjs           # Filter graph, encoders, probing and progress
+│   ├── ass.mjs              # Subtitle, watermark and Presenter FX overlays
+│   ├── jobs.mjs             # Queue, cancellation and cleanup lifecycle
+│   └── schema.mjs           # Versioned render-manifest validation
+├── scripts/                 # macOS setup/start and development helpers
+├── test/                    # Unit and real FFmpeg/API integration tests
+├── docs/FFMPEG_RENDERER.md  # Architecture and API reference
 ├── .github/
 │   └── workflows/
-│       └── deploy.yml       # GitHub Actions — auto-deploy to GitHub Pages on push to main
+│       └── deploy.yml       # Verify PRs and deploy the browser demo
 ├── index.html
 ├── vite.config.ts
 ├── package.json
@@ -276,10 +311,13 @@ advanced-cursor-webpage/
 
 ## 🔄 CI/CD — GitHub Pages Deployment
 
-Every push to `main` automatically:
+Every pull request and push to `main` automatically:
 1. Installs dependencies (`npm ci`)
-2. Builds the project (`npm run build`)
-3. Deploys `./dist` to GitHub Pages
+2. Checks FFmpeg capabilities
+3. Runs unit and end-to-end render tests
+4. Builds the project
+
+Successful pushes to `main` then deploy `./dist` to GitHub Pages. The static deployment remains a browser demo; production FFmpeg jobs run on the local companion service.
 
 The live URL is always up to date at:
 **https://onkarpawar1.github.io/advanced-cursor-webpage/**
@@ -289,6 +327,8 @@ The live URL is always up to date at:
 ## 🛠️ Known Limitations & Tips
 
 - **Browser Support**: Uses `MediaRecorder` — works best in **Chrome/Edge**. Firefox supports WebM export but may differ in codec availability.
+- **Production Export**: Requires the local Node/FFmpeg companion. The public GitHub Pages demo cannot execute FFmpeg by itself.
+- **Manual Presenter Actions**: Preview playback captures cursor and ink for deterministic FFmpeg export. Manual clip switching and Zoom Lens use Live WebM Capture.
 - **Video Clips Looping**: Short video clips (e.g., 8s) automatically loop within their timeline slot.
 - **PDF Quality**: Enable **High-Quality PDF** in settings for sharper slide rendering (uses 4× scale).
 - **Performance**: For best export quality, avoid moving other windows over the canvas during recording.
