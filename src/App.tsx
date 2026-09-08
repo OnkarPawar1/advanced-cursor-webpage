@@ -56,6 +56,13 @@ const AudioVisualMixer = () => {
   const [zoomLensSize, setZoomLensSize] = useState(180);
   const [showZoomedScene, setShowZoomedScene] = useState(false);
 
+  // Subtitles / Transcript
+  const [parsedCues, setParsedCues] = useState([]); // [{start, end, text}]
+  const [showSubtitles, setShowSubtitles] = useState(true);
+  const [subtitleFontSize, setSubtitleFontSize] = useState(42);
+  const [subtitleRawText, setSubtitleRawText] = useState('');
+  const [subtitleInputTab, setSubtitleInputTab] = useState('paste'); // 'paste' | 'upload'
+
   // Refs (Including UI Performance Refs)
   const canvasRef = useRef(null);
   const audioRef = useRef(null);
@@ -320,7 +327,8 @@ const AudioVisualMixer = () => {
       showAnimatedCursor, interactionMode, cursorStyle, cursorSize, cursorTrail,
       interactionIntensity, penColor, penWidth, highlightWidth,
       autoHideDrawings, drawingLifetime,
-      zoomLensShape, zoomLensScale, zoomLensSize, showZoomedScene
+      zoomLensShape, zoomLensScale, zoomLensSize, showZoomedScene,
+      parsedCues, showSubtitles, subtitleFontSize
   };
 
   // --- Media Element Loading Engine ---
@@ -332,6 +340,7 @@ const AudioVisualMixer = () => {
         vid.src = asset.url;
         vid.muted = muteVisuals; 
         vid.playsInline = true;
+        vid.loop = true;
         vid.crossOrigin = "anonymous";
         vid.preload = "auto";
         vid.style.display = "none"; 
@@ -367,6 +376,131 @@ const AudioVisualMixer = () => {
     const mins = Math.floor(s / 60);
     const secs = Math.floor(s % 60);
     return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  // --- WEBVTT Parser ---
+  const parseWebVTT = (text) => {
+    const cues = [];
+    // Normalize line endings and split into blocks
+    const blocks = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split(/\n{2,}/);
+    const timeRe = /^([\d]{2}:)?([\d]{2}):([\d]{2})[.,]([\d]{3})\s-->\s([\d]{2}:)?([\d]{2}):([\d]{2})[.,]([\d]{3})/;
+    const toSecs = (h, m, s, ms) => (parseInt(h || 0) * 3600) + (parseInt(m) * 60) + parseInt(s) + parseInt(ms) / 1000;
+    for (const block of blocks) {
+      const lines = block.trim().split('\n');
+      const tsLine = lines.find(l => timeRe.test(l));
+      if (!tsLine) continue;
+      const m = tsLine.match(timeRe);
+      if (!m) continue;
+      const start = toSecs(m[1]?.replace(':',''), m[2], m[3], m[4]);
+      const end   = toSecs(m[5]?.replace(':',''), m[6], m[7], m[8]);
+      const textLines = lines.slice(lines.indexOf(tsLine) + 1).filter(l => l.trim() && !l.match(/^\d+$/));
+      if (textLines.length > 0) {
+        cues.push({ start, end, text: textLines.join('\n') });
+      }
+    }
+    return cues;
+  };
+
+  const applySubtitleText = (raw) => {
+    setSubtitleRawText(raw);
+    const cues = parseWebVTT(raw);
+    setParsedCues(cues);
+  };
+
+  // --- Subtitle Canvas Draw ---
+  const drawSubtitle = (ctx, w, h, time) => {
+    const s = stateRefs.current;
+    if (!s.showSubtitles || !s.parsedCues || s.parsedCues.length === 0) return;
+    const cue = s.parsedCues.find(c => time >= c.start && time < c.end);
+    if (!cue) return;
+
+    const fontSize = s.subtitleFontSize || 42;
+    const font = `bold ${fontSize}px 'Noto Sans', 'Segoe UI', Arial, sans-serif`;
+    ctx.save();
+    ctx.font = font;
+
+    const lines = cue.text.split('\n');
+    const lineH = fontSize * 1.4;
+    const paddingX = 32;
+    const paddingY = 18;
+    const maxW = w * 0.88;
+
+    // Word-wrap each line to fit maxW
+    const wrappedLines = [];
+    for (const line of lines) {
+      const words = line.split(' ');
+      let current = '';
+      for (const word of words) {
+        const test = current ? current + ' ' + word : word;
+        if (ctx.measureText(test).width > maxW) {
+          if (current) wrappedLines.push(current);
+          current = word;
+        } else {
+          current = test;
+        }
+      }
+      if (current) wrappedLines.push(current);
+    }
+
+    const boxH = wrappedLines.length * lineH + paddingY * 2;
+    const boxW = Math.min(maxW + paddingX * 2,
+      Math.max(...wrappedLines.map(l => ctx.measureText(l).width)) + paddingX * 2);
+    const boxX = (w - boxW) / 2;
+    const boxY = h - boxH - 52;
+
+    // Background pill
+    ctx.fillStyle = 'rgba(0,0,0,0.72)';
+    ctx.beginPath();
+    ctx.roundRect(boxX, boxY, boxW, boxH, 12);
+    ctx.fill();
+
+    // Text
+    ctx.fillStyle = '#ffffff';
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'center';
+    ctx.shadowColor = 'rgba(0,0,0,0.9)';
+    ctx.shadowBlur = 6;
+    wrappedLines.forEach((line, i) => {
+      ctx.fillText(line, w / 2, boxY + paddingY + lineH * i + lineH / 2);
+    });
+    ctx.restore();
+  };
+
+  // --- Asset Reorder Helpers ---
+  const moveAssetUp = (id) => {
+    setVisualAssets(prev => {
+      const idx = prev.findIndex(a => a.id === id);
+      if (idx <= 0) return prev;
+      const next = [...prev];
+      [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
+      return next;
+    });
+  };
+
+  const moveAssetDown = (id) => {
+    setVisualAssets(prev => {
+      const idx = prev.findIndex(a => a.id === id);
+      if (idx < 0 || idx >= prev.length - 1) return prev;
+      const next = [...prev];
+      [next[idx], next[idx + 1]] = [next[idx + 1], next[idx]];
+      return next;
+    });
+  };
+
+  const sortAssetsAlpha = () => {
+    setVisualAssets(prev => [...prev].sort((a, b) => a.name.localeCompare(b.name)));
+  };
+
+  const sortAssetsNumeric = () => {
+    setVisualAssets(prev => [...prev].sort((a, b) => {
+      const numA = parseInt(a.name.match(/\d+/)?.[0] ?? '0', 10);
+      const numB = parseInt(b.name.match(/\d+/)?.[0] ?? '0', 10);
+      return numA !== numB ? numA - numB : a.name.localeCompare(b.name);
+    }));
+  };
+
+  const shuffleAssets = () => {
+    setVisualAssets(prev => [...prev].sort(() => Math.random() - 0.5));
   };
   
   const drawWatermark = (ctx, width, height) => {
@@ -482,8 +616,13 @@ const AudioVisualMixer = () => {
     } else if (asset.type === 'video') {
         const vid = videoElementsRef.current[asset.id];
         if (vid && vid.readyState >= 2) {
-             let vTime = timeOffset; 
-             if (vTime < 0) vTime = 0; 
+             let vTime = timeOffset;
+             if (vTime < 0) vTime = 0;
+             // Loop the video by wrapping timeOffset within its natural duration
+             const vidDur = vid.duration;
+             if (vidDur && vidDur > 0 && isFinite(vidDur)) {
+                 vTime = vTime % vidDur;
+             }
              if (Math.abs(vid.currentTime - vTime) > 0.3) vid.currentTime = vTime;
              if (vid.paused && (isPlaying || isRendering)) vid.play().catch(() => {});
              drawImageCover(ctx, vid, w, h);
@@ -1373,6 +1512,7 @@ const AudioVisualMixer = () => {
     }
     drawPresenterFX(ctx, w, h);
     drawWatermark(ctx, w, h);
+    drawSubtitle(ctx, w, h, time);
     // Presenter-only overview panel — reads from main canvas after full render, NOT recorded
     drawOverviewPanel();
 
@@ -1596,15 +1736,53 @@ const AudioVisualMixer = () => {
                 </div>
               </div>
 
-              <div className="space-y-2 max-h-32 overflow-y-auto custom-scrollbar">
-                {visualAssets.map((asset) => (
-                  <div key={asset.id} className="flex items-center justify-between bg-gray-700/50 p-2 rounded text-sm">
-                    <div className="flex items-center gap-2 truncate">
-                      {asset.type === 'video' ? <Film size={14} className="text-blue-400" /> : <ImageIcon size={14} className="text-purple-400" />}
-                      <span className="truncate max-w-[140px]">{asset.name}</span>
+              {/* Sort Toolbar */}
+              {visualAssets.length > 1 && (
+                <div className="flex items-center gap-1 mb-2 flex-wrap">
+                  <span className="text-xs text-gray-500 mr-1">Sort:</span>
+                  <button
+                    onClick={sortAssetsAlpha}
+                    title="Sort A → Z"
+                    className="px-2 py-0.5 text-xs bg-gray-700 hover:bg-indigo-600 text-gray-300 hover:text-white rounded transition-colors"
+                  >A→Z</button>
+                  <button
+                    onClick={sortAssetsNumeric}
+                    title="Sort by number"
+                    className="px-2 py-0.5 text-xs bg-gray-700 hover:bg-indigo-600 text-gray-300 hover:text-white rounded transition-colors"
+                  >1→9</button>
+                  <button
+                    onClick={shuffleAssets}
+                    title="Shuffle randomly"
+                    className="px-2 py-0.5 text-xs bg-gray-700 hover:bg-indigo-600 text-gray-300 hover:text-white rounded transition-colors"
+                  >🔀</button>
+                </div>
+              )}
+              <div className="space-y-1 max-h-40 overflow-y-auto custom-scrollbar">
+                {visualAssets.map((asset, idx) => (
+                  <div key={asset.id} className="flex items-center gap-1 bg-gray-700/50 p-1.5 rounded text-sm">
+                    {/* Up / Down */}
+                    <div className="flex flex-col gap-0.5">
+                      <button
+                        onClick={() => moveAssetUp(asset.id)}
+                        disabled={idx === 0}
+                        className="text-gray-500 hover:text-indigo-300 disabled:opacity-20 leading-none"
+                        title="Move up"
+                      >▲</button>
+                      <button
+                        onClick={() => moveAssetDown(asset.id)}
+                        disabled={idx === visualAssets.length - 1}
+                        className="text-gray-500 hover:text-indigo-300 disabled:opacity-20 leading-none"
+                        title="Move down"
+                      >▼</button>
                     </div>
-                    <button onClick={() => removeVisual(asset.id)} className="text-gray-500 hover:text-red-400">
-                      <Trash2 size={14} />
+                    {/* Icon + name */}
+                    <div className="flex items-center gap-1.5 truncate flex-1">
+                      <span className="text-gray-600 text-xs w-4 text-right shrink-0">{idx + 1}</span>
+                      {asset.type === 'video' ? <Film size={13} className="text-blue-400 shrink-0" /> : <ImageIcon size={13} className="text-purple-400 shrink-0" />}
+                      <span className="truncate max-w-[110px] text-xs">{asset.name}</span>
+                    </div>
+                    <button onClick={() => removeVisual(asset.id)} className="text-gray-500 hover:text-red-400 ml-auto shrink-0">
+                      <Trash2 size={13} />
                     </button>
                   </div>
                 ))}
@@ -1696,6 +1874,97 @@ const AudioVisualMixer = () => {
                         </div>
                     )}
                 </div>
+            </div>
+
+            {/* Subtitles / Transcript */}
+            <div className="mb-6 pt-4 border-t border-gray-700">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-medium text-gray-300 flex items-center gap-2">
+                  <FileText size={16} /> Subtitles
+                </h3>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <span className="text-xs text-gray-400">Show</span>
+                  <div
+                    onClick={() => setShowSubtitles(v => !v)}
+                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors cursor-pointer ${
+                      showSubtitles ? 'bg-indigo-600' : 'bg-gray-600'
+                    }`}
+                  >
+                    <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                      showSubtitles ? 'translate-x-4' : 'translate-x-1'
+                    }`} />
+                  </div>
+                </label>
+              </div>
+
+              {/* Input tabs */}
+              <div className="flex gap-1 mb-2">
+                <button
+                  onClick={() => setSubtitleInputTab('paste')}
+                  className={`px-2 py-1 text-xs rounded transition-colors ${
+                    subtitleInputTab === 'paste' ? 'bg-indigo-600 text-white' : 'bg-gray-700 text-gray-400 hover:text-white'
+                  }`}
+                >Paste Text</button>
+                <button
+                  onClick={() => setSubtitleInputTab('upload')}
+                  className={`px-2 py-1 text-xs rounded transition-colors ${
+                    subtitleInputTab === 'upload' ? 'bg-indigo-600 text-white' : 'bg-gray-700 text-gray-400 hover:text-white'
+                  }`}
+                >Upload .vtt</button>
+              </div>
+
+              {subtitleInputTab === 'paste' ? (
+                <div>
+                  <textarea
+                    rows={5}
+                    value={subtitleRawText}
+                    onChange={(e) => applySubtitleText(e.target.value)}
+                    placeholder={`WEBVTT\n\n00:00:00.000 --> 00:00:05.000\nYour subtitle text here`}
+                    className="w-full bg-gray-700 border border-gray-600 text-white text-xs rounded-lg p-2 font-mono resize-none focus:ring-indigo-500 focus:border-indigo-500"
+                  />
+                </div>
+              ) : (
+                <div className="relative">
+                  <input
+                    type="file"
+                    accept=".vtt,text/vtt"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      const reader = new FileReader();
+                      reader.onload = (ev) => applySubtitleText(ev.target.result as string);
+                      reader.readAsText(file, 'UTF-8');
+                    }}
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                  />
+                  <div className="flex items-center gap-2 w-full bg-gray-700 border border-gray-600 text-gray-300 text-sm rounded-lg p-2.5">
+                    <FileText size={16} className="shrink-0" />
+                    <span className="truncate text-xs">
+                      {parsedCues.length > 0 ? `✅ ${parsedCues.length} cues loaded` : 'Click to upload .vtt file'}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {parsedCues.length > 0 && (
+                <p className="text-xs text-indigo-400 mt-1">✅ {parsedCues.length} subtitle cues active</p>
+              )}
+
+              {/* Font size */}
+              {showSubtitles && (
+                <div className="mt-3">
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs text-gray-400">Font Size</label>
+                    <span className="text-xs text-indigo-300">{subtitleFontSize}px</span>
+                  </div>
+                  <input
+                    type="range" min={24} max={72} step={2}
+                    value={subtitleFontSize}
+                    onChange={(e) => setSubtitleFontSize(Number(e.target.value))}
+                    className="w-full h-1.5 accent-indigo-500"
+                  />
+                </div>
+              )}
             </div>
 
             {/* Settings */}
