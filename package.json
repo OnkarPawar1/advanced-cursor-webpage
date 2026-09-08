@@ -5,13 +5,26 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
+    "dev:server": "node --watch server/index.mjs",
+    "dev:all": "node scripts/dev.mjs",
     "build": "vite build",
-    "preview": "vite preview --host 0.0.0.0"
+    "preview": "vite preview --host 0.0.0.0",
+    "start": "node server/index.mjs",
+    "start:production": "npm run build && node server/index.mjs",
+    "setup:mac": "bash scripts/setup-macos.sh",
+    "check:ffmpeg": "node scripts/check-ffmpeg.mjs",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "dependencies": {
+    "express": "^5.2.1",
     "lucide-react": "^0.468.0",
+    "multer": "^2.3.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "zod": "^4.5.4"
   },
   "devDependencies": {
     "@types/react": "^18.3.12",
