@@ -6,14 +6,14 @@
   "scripts": {
     "prepare:manual-hq": "node scripts/enable-manual-hq.mjs",
     "dev": "npm run prepare:manual-hq && vite --host 0.0.0.0",
-    "dev:server": "npm run prepare:manual-hq && node --watch server/index.mjs",
-    "dev:all": "npm run prepare:manual-hq && node scripts/dev.mjs",
+    "dev:server": "npm run prepare:manual-hq && bash scripts/with-best-ffmpeg.sh node --watch server/index.mjs",
+    "dev:all": "npm run prepare:manual-hq && bash scripts/with-best-ffmpeg.sh node scripts/dev.mjs",
     "build": "npm run prepare:manual-hq && vite build",
     "preview": "vite preview --host 0.0.0.0",
-    "start": "npm run prepare:manual-hq && node server/index.mjs",
-    "start:production": "npm run build && node server/index.mjs",
+    "start": "npm run prepare:manual-hq && bash scripts/with-best-ffmpeg.sh node server/index.mjs",
+    "start:production": "npm run build && bash scripts/with-best-ffmpeg.sh node server/index.mjs",
     "setup:mac": "bash scripts/setup-macos.sh",
-    "check:ffmpeg": "node scripts/check-ffmpeg.mjs",
+    "check:ffmpeg": "bash scripts/with-best-ffmpeg.sh node scripts/check-ffmpeg.mjs",
     "test": "node --test"
   },
   "engines": {
