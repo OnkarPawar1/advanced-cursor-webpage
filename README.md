@@ -211,6 +211,24 @@ Detailed architecture, API, security defaults and preset behavior are documented
 
 ---
 
+### YouTube Live streaming (local Mac companion)
+
+You can send a **finished H.264/AAC MP4 render** directly to YouTube using FFmpeg without another video encoding pass. This works with the editor's slide timing, animations, transitions, captions, and other effects already included in the rendered file.
+
+1. On macOS, start the trusted local renderer with `npm run start:production` (or `npm start` if already built).
+2. Add narration and slides, customize transitions and animation, and open **Production FFmpeg Export**.
+3. Select **YouTube Live · 1080p 30 FPS H.264**. This uses a two-second keyframe interval and AAC audio. Click **Render High Quality**.
+4. After MP4 completion, open **YouTube Live Studio** below the export controls.
+5. In YouTube Studio, create or select a broadcast and copy a **fresh stream key**. Paste it into the local panel; choose **Repeat slideshow continuously** if desired.
+6. Click **Start YouTube Stream**. The local service sends the MP4 to YouTube over RTMPS at real-time playback speed, copying both audio and video streams.
+7. Check the preview / connection health in YouTube Studio and click **Go Live** if required. Stop with the **Stop Stream** button.
+
+**Security and availability:** The stream key is not stored in project files, browser storage, or GitHub. It is temporarily provided to the local FFmpeg process and may be visible to other local users inspecting process arguments. Keep your Mac and render service trusted and private. Never commit a key, share it in screenshots, or expose the renderer to the internet. GitHub Pages itself cannot run FFmpeg: the macOS renderer must remain running throughout the broadcast, and the Mac must stay awake. Do not close the lid unless macOS is configured to keep working. If a key is exposed, regenerate it in YouTube Studio.
+
+**Limitations:** This feature streams **completed automatic renders**, not live interactive edits. Manual slide switching and a dynamically moving zoom lens still use the separate **Live WebM Capture** workflow. ProRes MOV is not an RTMP-compatible input for stream-copy mode; render a YouTube-compatible MP4 instead. YouTube Studio manages the broadcast event; transmitting video does not by itself guarantee the event is public.
+
+---
+
 ### Live Manual Control (Optional)
 
 Enable **Live Manual Control** in Settings to drive the slideshow yourself while the audio plays — the filmstrip dashboard lets you jump to any clip instantly, and the recording captures exactly what you clicked.

@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
+import YouTubeLivePanel from './YouTubeLivePanel';
 import { Upload, Play, Pause, Download, Trash2, Film, Music, Image as ImageIcon, RefreshCcw, Shuffle, AlertCircle, VolumeX, Volume2, FileText, Loader2, Video, Clock, Layers, Dices, Sparkles, Type, Tv, ImagePlus, Move, MousePointerClick, SkipBack, SkipForward, LayoutGrid, CheckCircle2, Pencil, Highlighter, MousePointer2, Eraser, Zap, CircleDot, ZoomIn, ScanSearch, Copy, KeyRound, Wand2, Youtube, Repeat, Server, Cpu, Gauge, XCircle } from 'lucide-react';
 
 const configuredRenderApi = String(import.meta.env.VITE_RENDER_API_URL || '').replace(/\/$/, '');
@@ -3433,16 +3434,17 @@ The headline text drawn in the image must read exactly: "${headline}".`;
             <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
               <div>
                 <label className="block text-[11px] text-gray-400 mb-1">Quality preset</label>
-                <select value={productionPreset} onChange={event => setProductionPreset(event.target.value)} disabled={productionBusy} className="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg p-2.5 disabled:opacity-60">
+                <select value={productionPreset} onChange={event => { const choice = event.target.value; setProductionPreset(choice); if (choice === 'youtube-live') { setProductionResolution('1920x1080'); setProductionFps(30); } }} disabled={productionBusy} className="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg p-2.5 disabled:opacity-60">
                   <option value="high-quality" disabled={renderService.status === 'ready' && !renderService.capabilities?.encoders?.libx264}>High Quality · H.264 CRF 17</option>
                   <option value="balanced" disabled={renderService.status === 'ready' && !renderService.capabilities?.encoders?.libx264}>Balanced · H.264 CRF 20</option>
                   <option value="apple-silicon" disabled={renderService.status === 'ready' && !renderService.capabilities?.encoders?.h264Videotoolbox}>Apple Silicon · Fast Hardware</option>
+                  <option value="youtube-live">YouTube Live · 1080p 30 FPS H.264</option>
                   <option value="prores-master" disabled={renderService.status === 'ready' && !renderService.capabilities?.encoders?.proresKs}>ProRes 422 HQ Master</option>
                 </select>
               </div>
               <div>
                 <label className="block text-[11px] text-gray-400 mb-1">Resolution</label>
-                <select value={productionResolution} onChange={event => setProductionResolution(event.target.value)} disabled={productionBusy} className="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg p-2.5 disabled:opacity-60">
+                <select value={productionResolution} onChange={event => setProductionResolution(event.target.value)} disabled={productionBusy || productionPreset === 'youtube-live'} className="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg p-2.5 disabled:opacity-60">
                   <option value="1280x720">720p</option>
                   <option value="1920x1080">1080p Full HD</option>
                   <option value="3840x2160">2160p 4K</option>
@@ -3450,7 +3452,7 @@ The headline text drawn in the image must read exactly: "${headline}".`;
               </div>
               <div>
                 <label className="block text-[11px] text-gray-400 mb-1">Frame rate</label>
-                <select value={productionFps} onChange={event => setProductionFps(Number(event.target.value))} disabled={productionBusy} className="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg p-2.5 disabled:opacity-60">
+                <select value={productionFps} onChange={event => setProductionFps(Number(event.target.value))} disabled={productionBusy || productionPreset === 'youtube-live'} className="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg p-2.5 disabled:opacity-60">
                   {[24, 25, 30, 50, 60].map(fps => <option key={fps} value={fps}>{fps} FPS</option>)}
                 </select>
               </div>
@@ -3533,6 +3535,12 @@ The headline text drawn in the image must read exactly: "${headline}".`;
               </button>
             </div>
           </div>
+
+          <YouTubeLivePanel
+            apiBase={RENDER_API_BASE}
+            renderServiceReady={renderService.status === 'ready'}
+            renderJob={productionJob}
+          />
 
           {/* Manual Mode Filmstrip */}
           {isManualMode && activeAssets.length > 0 && (

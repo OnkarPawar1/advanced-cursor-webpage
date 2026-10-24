@@ -11,7 +11,7 @@ export const IMAGE_ANIMATIONS = [
 ];
 
 export const OUTPUT_PRESETS = [
-  'balanced', 'high-quality', 'apple-silicon', 'prores-master',
+  'balanced', 'high-quality', 'apple-silicon', 'prores-master', 'youtube-live',
 ];
 
 const hexColor = z.string().regex(/^#[0-9a-f]{6}$/i, 'Expected a six-digit hex colour');
@@ -86,6 +86,9 @@ export const projectSchema = z.object({
       || (output.width === 1920 && output.height === 1080)
       || (output.width === 3840 && output.height === 2160);
     if (!validPair) ctx.addIssue({ code: 'custom', message: 'Output must use a supported 16:9 resolution' });
+    if (output.preset === 'youtube-live' && (output.width !== 1920 || output.height !== 1080 || output.fps !== 30)) {
+      ctx.addIssue({ code: 'custom', message: 'YouTube Live export requires 1920x1080 at 30 FPS' });
+    }
   }),
   subtitles: z.object({
     enabled: z.boolean().default(false),

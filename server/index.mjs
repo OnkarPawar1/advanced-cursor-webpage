@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { RenderJobManager } from './jobs.mjs';
 import { inspectFfmpeg, renderProject, validateMediaFiles } from './ffmpeg.mjs';
 import { parseProject } from './schema.mjs';
+import { liveStatus, startYouTubeStream, stopYouTubeStream } from './youtube-live.mjs';
 
 const moduleDirectory = fileURLToPath(new URL('.', import.meta.url));
 const projectRoot = resolve(moduleDirectory, '..');
@@ -85,6 +86,10 @@ const app = express();
 const jobs = new RenderJobManager({
   concurrency: renderConcurrency,
   maxQueued: maxRenderQueue,
+  isPinnedJob: id => {
+    const session = liveStatus();
+    return session.sourceJobId === id && ['connecting', 'live', 'stopping'].includes(session.status);
+  },
 });
 let capabilitiesPromise = inspectFfmpeg();
 let shuttingDown = false;
@@ -329,6 +334,43 @@ app.get('/api/renders/:id/download', async (request, response, next) => {
   }
 });
 
+
+/* YouTube Live controls: use only completed MP4 renders already held by the
+   local FFmpeg service. Stream keys are never persisted or returned by an API. */
+app.get('/api/live/status', (_request, response) => {
+  response.setHeader('Cache-Control', 'no-store');
+  response.json(liveStatus());
+});
+
+app.post('/api/live/start', express.json({ limit: '4kb' }), async (request, response, next) => {
+  try {
+    if (!request.is('application/json')) {
+      return response.status(415).json({ error: 'JSON request required.' });
+    }
+    const { jobId, streamKey, loop = false } = request.body ?? {};
+    if (typeof jobId !== 'string' || !/^[0-9a-f-]{36}$/i.test(jobId)) {
+      return response.status(400).json({ error: 'Select a finished MP4 render first.' });
+    }
+    const job = jobs.getInternal(jobId);
+    if (!job || job.status !== 'completed' || !job.outputPath || !job.outputPath.endsWith('.mp4')) {
+      return response.status(409).json({ error: 'Finish an H.264 MP4 render before starting the stream.' });
+    }
+    await stat(job.outputPath);
+    const status = startYouTubeStream({
+      sourcePath: job.outputPath, sourceJobId: jobId, streamKey, loop,
+    });
+    response.setHeader('Cache-Control', 'no-store');
+    response.status(202).json(status);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/live/stop', (_request, response) => {
+  response.setHeader('Cache-Control', 'no-store');
+  response.json(stopYouTubeStream());
+});
+
 if (existsSync(distDirectory)) {
   app.use(express.static(distDirectory, { index: false, maxAge: '1h', etag: true }));
   app.use((request, response, next) => {
@@ -363,6 +405,7 @@ async function shutdown(signal) {
   shuttingDown = true;
   console.log(`Received ${signal}; stopping render jobs and cleaning temporary files.`);
   clearInterval(staleCleanupTimer);
+  stopYouTubeStream();
   const serverClosed = new Promise((resolveClose) => server.close(resolveClose));
   await jobs.shutdown();
   server.closeAllConnections?.();
