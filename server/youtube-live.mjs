@@ -25,10 +25,10 @@ export function startYouTubeStream({ sourcePath, sourceJobId, streamKey, loop = 
     ...(loop ? ['-stream_loop', '-1'] : []),
     '-re', '-i', sourcePath,
     '-map', '0:v:0', '-map', '0:a:0',
-    '-c:v', 'libx264', '-preset', 'veryfast', '-tune', 'zerolatency',
+    '-c:v', 'copy',
     '-pix_fmt', 'yuv420p', '-r', '30', '-g', '60', '-keyint_min', '60', '-sc_threshold', '0',
     '-b:v', '4500k', '-maxrate', '4500k', '-bufsize', '9000k',
-    '-c:a', 'aac', '-b:a', '160k', '-ar', '44100',
+    '-c:a', 'copy',
     '-f', 'flv', 'pipe:3',
   ];
   // pipe:3 is a byte stream, not an RTMP URL: use a local FFmpeg process
