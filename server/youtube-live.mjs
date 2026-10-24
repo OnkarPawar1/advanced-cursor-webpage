@@ -7,10 +7,9 @@ export function liveStatus() {
   const { id, status, startedAt, sourceJobId, error, loop, progress } = active;
   return { id, status, startedAt, sourceJobId, error, loop, progress };
 }
-export function startYouTubeStream({ sourcePath, sourceJobId, streamKey, loop = false }) {
-  if (active && ['connecting', 'live', 'stopping'].includes(active.status)) {
-    throw Object.assign(new Error('A stream is already running'), { status: 409 });
-  }
+export function buildLiveArgs({ sourcePath, streamKey, loop = false }) {
+  if (typeof sourcePath !== 'string' || !sourcePath) throw Object.assign(new Error('Missing source video'), { status: 400 });
+  if (typeof loop !== 'boolean') throw Object.assign(new Error('Loop must be a boolean'), { status: 400 });
   if (typeof streamKey !== 'string' || !/^[A-Za-z0-9_-]{8,200}$/.test(streamKey.trim())) {
     throw Object.assign(new Error('Enter a valid YouTube stream key'), { status: 400 });
   }
@@ -21,6 +20,13 @@ export function startYouTubeStream({ sourcePath, sourceJobId, streamKey, loop = 
     '-f', 'flv', '-progress', 'pipe:1', '-nostats',
     'rtmps://a.rtmps.youtube.com/live2/' + streamKey.trim()
   ];
+  return args;
+}
+export function startYouTubeStream({ sourcePath, sourceJobId, streamKey, loop = false }) {
+  if (active && ['connecting', 'live', 'stopping'].includes(active.status)) {
+    throw Object.assign(new Error('A stream is already running'), { status: 409 });
+  }
+  const args = buildLiveArgs({ sourcePath, streamKey, loop });
   const entry = {
     id: randomUUID(), status: 'connecting', startedAt: new Date().toISOString(),
     sourceJobId, error: null, loop,
