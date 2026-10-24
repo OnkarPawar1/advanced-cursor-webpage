@@ -81,7 +81,25 @@ function kenBurnsFilter(animation, duration, width, height, fps) {
 
 function encoderArguments(project, capabilities) {
   const { preset, width, fps } = project.output;
-  const commonH264 = ['-pix_fmt', 'yuv420p', '-tag:v', 'avc1'];
+  const commonH264 = ['-g', String(fps * 2), '-pix_fmt', 'yuv420p', '-tag:v', 'avc1'];
+
+  if (preset === 'youtube-live') {
+    const hardware = capabilities.encoders.h264Videotoolbox;
+    if (!hardware && !capabilities.encoders.libx264) {
+      const error = new Error('YouTube Live export requires H.264 VideoToolbox or libx264.');
+      error.code = 'ENCODER_UNAVAILABLE';
+      error.status = 422;
+      throw error;
+    }
+    return [
+      ...(hardware
+        ? ['-c:v', 'h264_videotoolbox', '-allow_sw', '1', '-realtime', 'true']
+        : ['-c:v', 'libx264', '-preset', 'veryfast', '-profile:v', 'high']),
+      '-b:v', '4500k', '-maxrate', '6000k', '-bufsize', '9000k',
+      ...commonH264,
+      '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-movflags', '+faststart',
+    ];
+  }
 
   if (preset === 'apple-silicon') {
     if (!capabilities.encoders.h264Videotoolbox) {
