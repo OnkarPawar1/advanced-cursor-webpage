@@ -15,10 +15,11 @@ function publicJob(job) {
 }
 
 export class RenderJobManager {
-  constructor({ concurrency = 1, maxQueued = 4, ttlMs = 6 * 60 * 60 * 1000 } = {}) {
+  constructor({ concurrency = 1, maxQueued = 4, ttlMs = 6 * 60 * 60 * 1000, isPinnedJob = () => false } = {}) {
     this.concurrency = concurrency;
     this.maxQueued = maxQueued;
     this.ttlMs = ttlMs;
+    this.isPinnedJob = isPinnedJob;
     this.jobs = new Map();
     this.queue = [];
     this.active = 0;
@@ -143,7 +144,7 @@ export class RenderJobManager {
     const removals = [];
     for (const [id, job] of this.jobs.entries()) {
       const completed = job.completedAt ? new Date(job.completedAt).getTime() : Infinity;
-      if (completed < cutoff && !['queued', 'running'].includes(job.status)) {
+      if (completed < cutoff && !['queued', 'running'].includes(job.status) && !this.isPinnedJob(id)) {
         this.jobs.delete(id);
         removals.push(rm(job.directory, { recursive: true, force: true }));
       }
