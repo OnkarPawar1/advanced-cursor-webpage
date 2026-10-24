@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import YouTubeLivePanel from './YouTubeLivePanel';
+import { textGraphemes, letterOpacity } from './animatedText.mjs';
 import { Upload, Play, Pause, Download, Trash2, Film, Music, Image as ImageIcon, RefreshCcw, Shuffle, AlertCircle, VolumeX, Volume2, FileText, Loader2, Video, Clock, Layers, Dices, Sparkles, Type, Tv, ImagePlus, Move, MousePointerClick, SkipBack, SkipForward, LayoutGrid, CheckCircle2, Pencil, Highlighter, MousePointer2, Eraser, Zap, CircleDot, ZoomIn, ScanSearch, Copy, KeyRound, Wand2, Youtube, Repeat, Server, Cpu, Gauge, XCircle } from 'lucide-react';
 
 const configuredRenderApi = String(import.meta.env.VITE_RENDER_API_URL || '').replace(/\/$/, '');
@@ -22,6 +23,25 @@ const AudioVisualMixer = () => {
   const [productionFps, setProductionFps] = useState(30);
   const [normalizeProductionAudio, setNormalizeProductionAudio] = useState(false);
   const [productionJob, setProductionJob] = useState({ id: '', status: 'idle', progress: 0, error: '', downloadUrl: '', filename: '' });
+  // Lightweight timed metadata only. Source media stays in the selected File objects;
+  // no video frames are saved to browser localStorage.
+  const [animatedTexts, setAnimatedTexts] = useState([]);
+  const [selectedTextId, setSelectedTextId] = useState(null);
+  const [placingAnimatedText, setPlacingAnimatedText] = useState(false);
+  const selectedAnimatedText = animatedTexts.find(item => item.id === selectedTextId) || null;
+  const editAnimatedText = (id, changes) =>
+    setAnimatedTexts(items => items.map(item => item.id === id ? { ...item, ...changes } : item));
+  const addAnimatedText = () => {
+    const id = window.crypto?.randomUUID?.() || String(Date.now());
+    const now = Math.max(0, Math.min(audioRef.current?.currentTime || 0, Math.max(0, audioDuration - 3)));
+    const item = {
+      id, text: 'Important point', start: Number(now.toFixed(2)),
+      duration: 3.5, x: 0.5, y: 0.35, fontSize: 32, color: '#FFFFFF',
+    };
+    setAnimatedTexts(items => [...items, item]);
+    setSelectedTextId(id);
+    setPlacingAnimatedText(true);
+  };
   const [, setPresenterCaptureRevision] = useState(0);
   
   // Settings
@@ -493,6 +513,7 @@ STYLE: bright, clean, high key, lots of white space, sharp vector-meets-3D-rende
       interactionIntensity, penColor, penWidth, highlightWidth,
       autoHideDrawings, drawingLifetime,
       zoomLensShape, zoomLensScale, zoomLensSize, showZoomedScene,
+      animatedTexts,
       parsedCues, showSubtitles, subtitleFontSize,
       subtitleFont, subtitleColor, subtitleStrokeColor, subtitleStrokeWidth,
       subtitleBgStyle, subtitleShadow, subtitleUppercase, subtitlePopIn, subtitlePositionY
@@ -595,6 +616,47 @@ STYLE: bright, clean, high key, lots of white space, sharp vector-meets-3D-rende
   }, [subtitleFont]);
 
   const getSubtitleFontDef = (id) => SUBTITLE_FONTS.find(f => f.id === id) || SUBTITLE_FONTS[0];
+
+  // --- Timed, independently animated Unicode graphemes ---
+  const drawAnimatedText = (ctx, width, height, time) => {
+    const items = stateRefs.current.animatedTexts || [];
+    for (const item of items) {
+      const age = time - item.start;
+      if (age < 0 || age >= item.duration) continue;
+      const letters = textGraphemes(item.text);
+      if (!letters.length) continue;
+      const fontSize = item.fontSize || 32;
+      ctx.save();
+      ctx.font = `700 ${fontSize}px "Noto Sans", Arial, sans-serif`;
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'left';
+      ctx.lineJoin = 'round';
+      const advance = letters.map(letter => ctx.measureText(letter).width);
+      const wholeWidth = advance.reduce((a, b) => a + b, 0);
+      const scale = Math.min(1, (width * 0.93) / Math.max(wholeWidth, 1));
+      const x = item.x * width;
+      const y = item.y * height;
+      ctx.translate(x, y);
+      ctx.scale(scale, scale);
+      let cursorX = -wholeWidth / 2;
+      letters.forEach((letter, index) => {
+        const opacity = letterOpacity(age, index, letters.length, item.duration);
+        if (opacity > 0.002) {
+          ctx.globalAlpha = opacity;
+          ctx.strokeStyle = 'rgba(0,0,0,0.86)';
+          ctx.lineWidth = 3;
+          ctx.strokeText(letter, cursorX, 0);
+          ctx.fillStyle = item.color;
+          ctx.shadowColor = 'rgba(0,0,0,0.6)';
+          ctx.shadowBlur = 6;
+          ctx.fillText(letter, cursorX, 0);
+          ctx.shadowBlur = 0;
+        }
+        cursorX += advance[index];
+      });
+      ctx.restore();
+    }
+  };
 
   // --- Subtitle Canvas Draw ---
   const drawSubtitle = (ctx, w, h, time) => {
@@ -996,6 +1058,14 @@ STYLE: bright, clean, high key, lots of white space, sharp vector-meets-3D-rende
     const now = performance.now();
     pointerRef.current = { ...pointerRef.current, x: point.x, y: point.y, visible: true, down: true, lastMove: now };
     pushTrailPoint(point.x, point.y, now);
+    if (placingAnimatedText && selectedTextId) {
+      editAnimatedText(selectedTextId, {
+        x: Math.max(0.02, Math.min(0.98, point.x / canvasRef.current.width)),
+        y: Math.max(0.02, Math.min(0.98, point.y / canvasRef.current.height)),
+      });
+      setPlacingAnimatedText(false);
+      return;
+    }
     capturePresenterPoint(point, true);
 
     clickBurstsRef.current.push({ x: point.x, y: point.y, born: now });
@@ -1869,6 +1939,7 @@ STYLE: bright, clean, high key, lots of white space, sharp vector-meets-3D-rende
     drawPresenterFX(ctx, w, h);
     drawWatermark(ctx, w, h);
     drawSubtitle(ctx, w, h, time);
+    drawAnimatedText(ctx, w, h, time);
     // Presenter-only overview panel — reads from main canvas after full render, NOT recorded
     drawOverviewPanel();
 
@@ -2034,6 +2105,9 @@ STYLE: bright, clean, high key, lots of white space, sharp vector-meets-3D-rende
           preset: productionPreset,
           normalizeAudio: normalizeProductionAudio,
         },
+        animatedText: animatedTexts.filter(item => item.text.trim() && item.start + item.duration <= audioDuration + 0.01).map(item => ({
+          ...item, text: item.text.trim(),
+        })),
         subtitles: {
           enabled: showSubtitles && parsedCues.length > 0,
           cues: parsedCues.filter(cue => cue.start < audioDuration).map(cue => ({ ...cue, end: Math.min(cue.end, audioDuration) })),
