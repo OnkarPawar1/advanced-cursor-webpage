@@ -35,6 +35,15 @@ export function startYouTubeStream({ sourcePath, sourceJobId, streamKey, loop = 
   active = entry;
   const child = spawn(ffmpeg, args, { stdio: ['ignore', 'pipe', 'pipe'] });
   entry.child = child;
+  // Keep macOS awake for multi-hour broadcasts even when the user is idle.
+  // caffeinate exits when the FFmpeg process finishes.
+  if (process.platform === 'darwin' && child.pid) {
+    const keeper = spawn('caffeinate', ['-i', '-w', String(child.pid)], {
+      stdio: 'ignore',
+    });
+    keeper.on('error', () => {}); // Not fatal if caffeine control is unavailable.
+    entry.keepAwake = keeper;
+  }
   let remainder = '';
   child.stdout.on('data', chunk => {
     remainder += chunk.toString();
@@ -70,6 +79,8 @@ export function startYouTubeStream({ sourcePath, sourceJobId, streamKey, loop = 
       entry.error = lastError || 'FFmpeg disconnected (exit ' + code + ')';
     }
     entry.child = null;
+    entry.keepAwake?.kill('SIGTERM');
+    entry.keepAwake = null;
   });
   return liveStatus();
 }
