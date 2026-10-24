@@ -86,6 +86,10 @@ const app = express();
 const jobs = new RenderJobManager({
   concurrency: renderConcurrency,
   maxQueued: maxRenderQueue,
+  isPinnedJob: id => {
+    const session = liveStatus();
+    return session.sourceJobId === id && ['connecting', 'live', 'stopping'].includes(session.status);
+  },
 });
 let capabilitiesPromise = inspectFfmpeg();
 let shuttingDown = false;
