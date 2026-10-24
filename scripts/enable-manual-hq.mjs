@@ -100,8 +100,8 @@ await patchFile('src/App.tsx', [
   {
     label: 'webm fallback wording',
     marker: 'Quick WebM only',
-    find: `<p className="text-xs font-semibold text-gray-300 flex items-center gap-1.5"><Cpu size={14} /> Live browser fallback</p>\n                <p className="text-[11px] text-gray-500">Use for manual switching or the interactive magnifier.</p>`,
-    replace: `<p className="text-xs font-semibold text-gray-300 flex items-center gap-1.5"><Cpu size={14} /> Optional browser capture</p>\n                <p className="text-[11px] text-gray-500">Quick WebM only. For maximum quality—including Live Manual and Zoom Lens—use Render High Quality above.</p>`,
+    find: `<p className="text-xs font-semibold text-gray-300 flex items-center gap-1.5"><Cpu size={14} /> Live browser fallback</p>`,
+    replace: `<p className="text-xs font-semibold text-gray-300 flex items-center gap-1.5"><Cpu size={14} /> Optional browser capture · Quick WebM only</p>`,
   },
 ]);
 

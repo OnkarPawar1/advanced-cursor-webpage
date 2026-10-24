@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import YouTubeLivePanel from './YouTubeLivePanel';
+import { textGraphemes, letterOpacity } from './animatedText.mjs';
 import { Upload, Play, Pause, Download, Trash2, Film, Music, Image as ImageIcon, RefreshCcw, Shuffle, AlertCircle, VolumeX, Volume2, FileText, Loader2, Video, Clock, Layers, Dices, Sparkles, Type, Tv, ImagePlus, Move, MousePointerClick, SkipBack, SkipForward, LayoutGrid, CheckCircle2, Pencil, Highlighter, MousePointer2, Eraser, Zap, CircleDot, ZoomIn, ScanSearch, Copy, KeyRound, Wand2, Youtube, Repeat, Server, Cpu, Gauge, XCircle } from 'lucide-react';
 
 const configuredRenderApi = String(import.meta.env.VITE_RENDER_API_URL || '').replace(/\/$/, '');
@@ -22,8 +23,73 @@ const AudioVisualMixer = () => {
   const [productionFps, setProductionFps] = useState(30);
   const [normalizeProductionAudio, setNormalizeProductionAudio] = useState(false);
   const [productionJob, setProductionJob] = useState({ id: '', status: 'idle', progress: 0, error: '', downloadUrl: '', filename: '' });
+  // Lightweight timed metadata only. Source media stays in the selected File objects;
+  // no video frames are saved to browser localStorage.
+  const [animatedTexts, setAnimatedTexts] = useState([]);
+  const [selectedTextId, setSelectedTextId] = useState(null);
+  const [placingAnimatedText, setPlacingAnimatedText] = useState(false);
+  const selectedAnimatedText = animatedTexts.find(item => item.id === selectedTextId) || null;
+  const editAnimatedText = (id, changes) =>
+    setAnimatedTexts(items => items.map(item => item.id === id ? { ...item, ...changes } : item));
+  const addAnimatedText = () => {
+    const id = window.crypto?.randomUUID?.() || String(Date.now());
+    const now = Math.max(0, Math.min(audioRef.current?.currentTime || 0, Math.max(0, audioDuration - 3)));
+    const item = {
+      id, text: 'Important point', start: Number(now.toFixed(2)),
+      duration: 3.5, x: 0.5, y: 0.35, fontSize: 32, color: '#FFFFFF',
+    };
+    setAnimatedTexts(items => [...items, item]);
+    setSelectedTextId(id);
+    setPlacingAnimatedText(true);
+  };
   const [, setPresenterCaptureRevision] = useState(0);
   
+  const saveTextTimeline = () => {
+    const data = { version: 1, type: 'animated-text-timeline', overlays: animatedTexts };
+    const objectUrl = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+    const anchor = document.createElement('a');
+    anchor.href = objectUrl;
+    anchor.download = 'animated-text-timeline.json';
+    anchor.click();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+  };
+
+  const loadTextTimeline = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    try {
+      if (file.size > 1_000_000) throw new Error('File is too large for text metadata.');
+      const data = JSON.parse(await file.text());
+      if (data?.version !== 1 || data.type !== 'animated-text-timeline' || !Array.isArray(data.overlays) || data.overlays.length > 2000) {
+        throw new Error('This is not a valid animated-text timeline file.');
+      }
+      const items = data.overlays.map((item, index) => {
+        const duration = Number(item.duration);
+        const start = Number(item.start);
+        const x = Number(item.x), y = Number(item.y);
+        const fontSize = Number(item.fontSize);
+        const text = String(item.text ?? '').replace(/[\\r\\n]/g, ' ').trim();
+        if (!text || text.length > 120 || !Number.isFinite(start) || start < 0 ||
+            !Number.isFinite(duration) || duration < 3 || duration > 4 ||
+            !Number.isFinite(x) || x < 0 || x > 1 || !Number.isFinite(y) || y < 0 || y > 1 ||
+            !Number.isFinite(fontSize) || fontSize < 16 || fontSize > 64 ||
+            !/^#[a-fA-F0-9]{6}$/.test(item.color)) {
+          throw new Error('Text cue ' + (index + 1) + ' contains invalid settings.');
+        }
+        return {
+          id: window.crypto?.randomUUID?.() || 'restored-' + index,
+          text, start, duration, x, y, fontSize, color: item.color,
+        };
+      });
+      setAnimatedTexts(items);
+      setSelectedTextId(items[0]?.id || null);
+      setPlacingAnimatedText(false);
+    } catch (error) {
+      window.alert(error.message || 'Could not load the text timeline.');
+    }
+  };
+
   // Settings
   const [useShuffle, setUseShuffle] = useState(false);
   const [imageDuration, setImageDuration] = useState(5);
@@ -223,6 +289,7 @@ STYLE: bright, clean, high key, lots of white space, sharp vector-meets-3D-rende
   ];
 
   const productionBusy = ['uploading', 'queued', 'running', 'cancelling'].includes(productionJob.status);
+  const browserCaptureTooLong = audioDuration > 20 * 60;
 
   const checkRenderService = async () => {
     setRenderService(prev => ({ ...prev, status: 'checking', error: '' }));
@@ -493,6 +560,7 @@ STYLE: bright, clean, high key, lots of white space, sharp vector-meets-3D-rende
       interactionIntensity, penColor, penWidth, highlightWidth,
       autoHideDrawings, drawingLifetime,
       zoomLensShape, zoomLensScale, zoomLensSize, showZoomedScene,
+      animatedTexts,
       parsedCues, showSubtitles, subtitleFontSize,
       subtitleFont, subtitleColor, subtitleStrokeColor, subtitleStrokeWidth,
       subtitleBgStyle, subtitleShadow, subtitleUppercase, subtitlePopIn, subtitlePositionY
@@ -595,6 +663,47 @@ STYLE: bright, clean, high key, lots of white space, sharp vector-meets-3D-rende
   }, [subtitleFont]);
 
   const getSubtitleFontDef = (id) => SUBTITLE_FONTS.find(f => f.id === id) || SUBTITLE_FONTS[0];
+
+  // --- Timed, independently animated Unicode graphemes ---
+  const drawAnimatedText = (ctx, width, height, time) => {
+    const items = stateRefs.current.animatedTexts || [];
+    for (const item of items) {
+      const age = time - item.start;
+      if (age < 0 || age >= item.duration) continue;
+      const letters = textGraphemes(item.text);
+      if (!letters.length) continue;
+      const fontSize = item.fontSize || 32;
+      ctx.save();
+      ctx.font = `700 ${fontSize}px "Noto Sans", Arial, sans-serif`;
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'left';
+      ctx.lineJoin = 'round';
+      const advance = letters.map(letter => ctx.measureText(letter).width);
+      const wholeWidth = advance.reduce((a, b) => a + b, 0);
+      const scale = Math.min(1, (width * 0.93) / Math.max(wholeWidth, 1));
+      const x = item.x * width;
+      const y = item.y * height;
+      ctx.translate(x, y);
+      ctx.scale(scale, scale);
+      let cursorX = -wholeWidth / 2;
+      letters.forEach((letter, index) => {
+        const opacity = letterOpacity(age, index, letters.length, item.duration);
+        if (opacity > 0.002) {
+          ctx.globalAlpha = opacity;
+          ctx.strokeStyle = 'rgba(0,0,0,0.86)';
+          ctx.lineWidth = 3;
+          ctx.strokeText(letter, cursorX, 0);
+          ctx.fillStyle = item.color;
+          ctx.shadowColor = 'rgba(0,0,0,0.6)';
+          ctx.shadowBlur = 6;
+          ctx.fillText(letter, cursorX, 0);
+          ctx.shadowBlur = 0;
+        }
+        cursorX += advance[index];
+      });
+      ctx.restore();
+    }
+  };
 
   // --- Subtitle Canvas Draw ---
   const drawSubtitle = (ctx, w, h, time) => {
@@ -996,6 +1105,14 @@ STYLE: bright, clean, high key, lots of white space, sharp vector-meets-3D-rende
     const now = performance.now();
     pointerRef.current = { ...pointerRef.current, x: point.x, y: point.y, visible: true, down: true, lastMove: now };
     pushTrailPoint(point.x, point.y, now);
+    if (placingAnimatedText && selectedTextId) {
+      editAnimatedText(selectedTextId, {
+        x: Math.max(0.02, Math.min(0.98, point.x / canvasRef.current.width)),
+        y: Math.max(0.02, Math.min(0.98, point.y / canvasRef.current.height)),
+      });
+      setPlacingAnimatedText(false);
+      return;
+    }
     capturePresenterPoint(point, true);
 
     clickBurstsRef.current.push({ x: point.x, y: point.y, born: now });
@@ -1869,6 +1986,7 @@ STYLE: bright, clean, high key, lots of white space, sharp vector-meets-3D-rende
     drawPresenterFX(ctx, w, h);
     drawWatermark(ctx, w, h);
     drawSubtitle(ctx, w, h, time);
+    drawAnimatedText(ctx, w, h, time);
     // Presenter-only overview panel — reads from main canvas after full render, NOT recorded
     drawOverviewPanel();
 
@@ -2034,6 +2152,9 @@ STYLE: bright, clean, high key, lots of white space, sharp vector-meets-3D-rende
           preset: productionPreset,
           normalizeAudio: normalizeProductionAudio,
         },
+        animatedText: animatedTexts.filter(item => item.text.trim() && item.start + item.duration <= audioDuration + 0.01).map(item => ({
+          ...item, text: item.text.trim(),
+        })),
         subtitles: {
           enabled: showSubtitles && parsedCues.length > 0,
           cues: parsedCues.filter(cue => cue.start < audioDuration).map(cue => ({ ...cue, end: Math.min(cue.end, audioDuration) })),
@@ -2121,6 +2242,10 @@ STYLE: bright, clean, high key, lots of white space, sharp vector-meets-3D-rende
 
   const startRendering = () => {
     if (!audioFile || activeAssets.length === 0) return;
+    if (audioDuration > 20 * 60) {
+      window.alert('Long videos must use Production FFmpeg Export to avoid exhausting browser memory.');
+      return;
+    }
 
     Object.values(videoElementsRef.current).forEach(v => { v.muted = muteVisuals; });
 
@@ -3332,6 +3457,118 @@ The headline text drawn in the image must read exactly: "${headline}".`;
              )}
           </div>
 
+          {/* Timed text overlays: metadata-only, burned into local FFmpeg export. */}
+          <section className="bg-gray-800 p-5 rounded-2xl border border-indigo-500/40 shadow-inner space-y-4">
+            <div className="flex flex-wrap justify-between gap-3 items-start">
+              <div>
+                <h3 className="text-base font-bold text-indigo-300 flex items-center gap-2">
+                  <Type size={18} /> Animated Text Overlays
+                </h3>
+                <p className="text-xs text-gray-400 mt-1">
+                  Beautiful small text anywhere on your slideshow. Letters appear one by one, then dissolve after 3–4 seconds.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2 items-center">
+                <button type="button" onClick={saveTextTimeline} disabled={!animatedTexts.length}
+                  className="px-3 py-2 text-xs rounded-lg bg-gray-700 hover:bg-gray-600 disabled:opacity-40">
+                  Save Text Timeline JSON
+                </button>
+                <label className="px-3 py-2 text-xs rounded-lg bg-gray-700 hover:bg-gray-600 cursor-pointer">
+                  Load Text Timeline
+                  <input type="file" accept="application/json,.json" onChange={loadTextTimeline} className="hidden" />
+                </label>
+              </div>
+              <button type="button" onClick={addAnimatedText}
+                disabled={!audioFile || audioDuration < 3 || productionBusy}
+                className="px-4 py-2.5 text-sm rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 font-bold">
+                + Add Text at Playhead
+              </button>
+            </div>
+            {animatedTexts.length > 0 && (
+              <div className="flex gap-2 flex-wrap">
+                {animatedTexts.map((item, index) => (
+                  <button type="button" key={item.id}
+                    onClick={() => { setSelectedTextId(item.id); setPlacingAnimatedText(false); if (audioRef.current) audioRef.current.currentTime = item.start; }}
+                    className={`text-xs rounded-lg border px-3 py-2 max-w-[220px] truncate ${item.id === selectedTextId ? 'bg-indigo-700 border-indigo-400 text-white' : 'bg-gray-900 border-gray-600 text-gray-300 hover:border-indigo-400'}`}>
+                    {index + 1}. {item.text || 'Untitled'} · {formatTime(item.start)}
+                  </button>
+                ))}
+              </div>
+            )}
+            {selectedAnimatedText && (
+              <div className="space-y-3 bg-gray-900/65 border border-gray-700 rounded-xl p-4">
+                <div className="flex justify-between gap-3 items-start">
+                  <label className="text-sm font-semibold text-gray-200" htmlFor="animated-text-content">Text content</label>
+                  <button type="button"
+                    onClick={() => { setAnimatedTexts(items => items.filter(item => item.id !== selectedTextId)); setSelectedTextId(null); setPlacingAnimatedText(false); }}
+                    className="text-xs flex items-center gap-1 text-red-300 hover:text-red-200">
+                    <Trash2 size={14} /> Delete
+                  </button>
+                </div>
+                <input id="animated-text-content" value={selectedAnimatedText.text}
+                  onChange={e => editAnimatedText(selectedTextId, { text: e.target.value.replace(/[\r\n]/g, ' ').slice(0, 120) })}
+                  maxLength={120} placeholder="Enter a short highlight"
+                  className="w-full rounded-lg border border-gray-600 bg-gray-800 p-2.5 text-white text-sm" />
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                  <label className="text-xs text-gray-300">Show at (seconds)
+                    <input type="number" min="0" max={Math.max(0, audioDuration - selectedAnimatedText.duration)} step="0.1"
+                      value={selectedAnimatedText.start}
+                      onChange={e => editAnimatedText(selectedTextId, { start: Math.max(0, Math.min(Math.max(0, audioDuration - selectedAnimatedText.duration), Number(e.target.value) || 0)) })}
+                      className="w-full mt-1 p-2 rounded border border-gray-600 bg-gray-800 text-white" />
+                  </label>
+                  <label className="text-xs text-gray-300">Lifetime
+                    <select value={selectedAnimatedText.duration}
+                      onChange={e => {
+                        const duration = Number(e.target.value);
+                        editAnimatedText(selectedTextId, { duration, start: Math.min(selectedAnimatedText.start, Math.max(0, audioDuration - duration)) });
+                      }}
+                      className="w-full mt-1 p-2 rounded border border-gray-600 bg-gray-800 text-white">
+                      <option value={3}>3 seconds</option>
+                      <option value={3.5}>3.5 seconds</option>
+                      <option value={4}>4 seconds</option>
+                    </select>
+                  </label>
+                  <label className="text-xs text-gray-300">Size ({selectedAnimatedText.fontSize}px)
+                    <input type="range" min="16" max="64" step="1" value={selectedAnimatedText.fontSize}
+                      onChange={e => editAnimatedText(selectedTextId, { fontSize: Number(e.target.value) })}
+                      className="w-full mt-3 accent-indigo-500" />
+                  </label>
+                  <label className="text-xs text-gray-300">Color
+                    <input type="color" value={selectedAnimatedText.color}
+                      onChange={e => editAnimatedText(selectedTextId, { color: e.target.value })}
+                      className="w-full mt-1 h-9 rounded border border-gray-600 bg-gray-800 cursor-pointer" />
+                  </label>
+                  <label className="text-xs text-gray-300">Horizontal ({Math.round(selectedAnimatedText.x * 100)}%)
+                    <input type="range" min="0.02" max="0.98" step="0.01" value={selectedAnimatedText.x}
+                      onChange={e => editAnimatedText(selectedTextId, { x: Number(e.target.value) })}
+                      className="w-full mt-3 accent-indigo-500" />
+                  </label>
+                  <label className="text-xs text-gray-300">Vertical ({Math.round(selectedAnimatedText.y * 100)}%)
+                    <input type="range" min="0.02" max="0.98" step="0.01" value={selectedAnimatedText.y}
+                      onChange={e => editAnimatedText(selectedTextId, { y: Number(e.target.value) })}
+                      className="w-full mt-3 accent-indigo-500" />
+                  </label>
+                </div>
+                <div className="flex gap-2 flex-wrap items-center">
+                  <button type="button"
+                    onClick={() => {
+                      setPlacingAnimatedText(true);
+                      if (audioRef.current) audioRef.current.currentTime = Math.min(audioDuration, selectedAnimatedText.start + 1);
+                    }}
+                    className={`px-3 py-2 rounded-lg text-xs font-semibold ${placingAnimatedText ? 'bg-amber-600' : 'bg-indigo-700 hover:bg-indigo-600'}`}>
+                    {placingAnimatedText ? 'Click a position in the preview…' : 'Place Anywhere on Preview'}
+                  </button>
+                  <button type="button" onClick={() => { if (audioRef.current) audioRef.current.currentTime = Math.min(audioDuration, selectedAnimatedText.start + 1); }}
+                    className="px-3 py-2 rounded-lg text-xs font-semibold bg-gray-700 hover:bg-gray-600">
+                    Preview Text at its Timestamp
+                  </button>
+                  <span className="text-[11px] text-gray-400">Animations are saved as timeline metadata and baked into FFmpeg MP4.</span>
+                </div>
+              </div>
+            )}
+            {!animatedTexts.length && <p className="text-xs text-gray-500">Add your first title while narration is loaded; click the preview to choose its position.</p>}
+          </section>
+
           {/* Zoomed Scene Overview Panel — presenter only, not recorded */}
           {showZoomedScene && interactionMode === 'zoom' && (
             <div className="bg-gray-800 p-4 rounded-xl border border-orange-500/30 shadow-inner">
@@ -3519,13 +3756,14 @@ The headline text drawn in the image must read exactly: "${headline}".`;
             <div className="mt-4 pt-4 border-t border-gray-700 flex items-center justify-between gap-3 flex-wrap">
               <div>
                 <p className="text-xs font-semibold text-gray-300 flex items-center gap-1.5"><Cpu size={14} /> Live browser fallback</p>
-                <p className="text-[11px] text-gray-500">Use for manual switching or the interactive magnifier.</p>
+                <p className="text-[11px] text-gray-500">Use for short manual recordings or interactive magnifier.</p>
+                {browserCaptureTooLong && <p className="text-[11px] text-amber-300 mt-1">Long narration detected: browser recording is disabled to prevent memory exhaustion. Use Production FFmpeg Export instead.</p>}
               </div>
               <button
                 onClick={startRendering}
-                disabled={!audioFile || activeAssets.length === 0 || isRendering || productionBusy}
+                disabled={!audioFile || activeAssets.length === 0 || isRendering || productionBusy || browserCaptureTooLong}
                 className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${
-                  !audioFile || activeAssets.length === 0 || isRendering || productionBusy
+                  !audioFile || activeAssets.length === 0 || isRendering || productionBusy || browserCaptureTooLong
                     ? 'bg-gray-900 text-gray-600 cursor-not-allowed border border-gray-700'
                     : 'bg-gray-700 hover:bg-gray-600 text-gray-200 border border-gray-600'
                 }`}

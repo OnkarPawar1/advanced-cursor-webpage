@@ -149,7 +149,8 @@ function encoderArguments(project, capabilities) {
 }
 
 export function hasAssOverlays(project) {
-  return (project.subtitles.enabled && project.subtitles.cues.length > 0)
+  return (project.animatedText?.length > 0)
+    || (project.subtitles.enabled && project.subtitles.cues.length > 0)
     || (project.watermark.enabled && project.watermark.type === 'text')
     || (project.presenter.enabled && (project.presenter.pointerEvents.length > 0 || project.presenter.strokes.length > 0));
 }

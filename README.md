@@ -211,6 +211,21 @@ Detailed architecture, API, security defaults and preset behavior are documented
 
 ---
 
+### Long videos and animated text overlays
+
+For 1–4 hour narrations, use **Production FFmpeg Export**. The optional **Live WebM Capture** workflow collects all recorded chunks in browser memory and is disabled when source narration exceeds 20 minutes, to reduce the risk of browser crashes. Production rendering submits a lightweight timeline and local media files to the Mac companion server; FFmpeg writes the MP4 directly to local disk.
+
+The new **Animated Text Overlays** editor sits directly under the preview canvas:
+1. Play or seek to a timestamp in the narration and click **Add Text at Playhead**.
+2. Replace the example text with a short sentence, adjust its font size (16–64 px), color and start time.
+3. Choose 3, 3.5 or 4 seconds. Text reveals progressively and each letter dissolves automatically near the end.
+4. Click **Place Anywhere on Preview**, then click the position you want, or use the horizontal/vertical sliders.
+5. Add as many cues as you need, then use **Production FFmpeg Export**. Your text overlay timings, positions and animations are burned into the exported MP4 using FFmpeg's ASS renderer.
+
+Text overlays are small editable metadata objects in browser memory, **not** browser-recorded video. Use **Save Text Timeline JSON** to back up these cues outside Chrome and **Load Text Timeline** to restore them later (you will still need to reselect your audio and slide files). Other media files can still consume browser memory during preview/PDF processing. A page refresh clears unsaved editing state; your source files stay on your Mac. Keep the editor open while working, and for critical long projects maintain your own backups of source files.
+
+---
+
 ### YouTube Live streaming (local Mac companion)
 
 You can send a **finished H.264/AAC MP4 render** directly to YouTube using FFmpeg without another video encoding pass. This works with the editor's slide timing, animations, transitions, captions, and other effects already included in the rendered file.

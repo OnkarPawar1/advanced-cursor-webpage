@@ -1,4 +1,5 @@
 import { writeFile } from 'node:fs/promises';
+import { textGraphemes, letterWindows } from '../src/animatedText.mjs';
 
 const FONT_MAP = {
   Anton: 'Anton',
@@ -106,6 +107,7 @@ export function buildAssDocument(project) {
     '[V4+ Styles]',
     'Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding',
     captionStyle,
+    `Style: AnimatedText,Noto Sans,32,${assColor('#FFFFFF')},${assColor('#FFFFFF')},${assColor('#050505')},${assColor('#000000',255)},-1,0,0,0,100,100,0,0,1,2,1,5,0,0,0,1`,
     `Style: Watermark,Arial,${Math.round(24 * scale)},${assColor('#FFFFFF')},${assColor('#FFFFFF')},${assColor('#000000')},${assColor('#000000', 80)},-1,0,0,0,100,100,0,0,3,8,1,3,20,20,20,1`,
     `Style: Pointer,Arial,${Math.round(44 * scale)},${assColor('#FFE45E')},${assColor('#FFE45E')},${assColor('#FFFFFF')},${assColor('#000000', 255)},-1,0,0,0,100,100,0,0,1,2,2,5,0,0,0,1`,
     '',
@@ -130,6 +132,24 @@ export function buildAssDocument(project) {
         : '';
       lines.push(`Dialogue: 3,${assTime(cue.start)},${assTime(cue.end)},Caption,,0,0,0,,{\\an5\\pos(${Math.round(width / 2)},${positionY})${pop}}${text}`);
     }
+  }
+
+  // One ASS event per text cue, with independent reveal/dissolve transforms
+  // applied to each Unicode grapheme. No browser video capture is involved.
+  for (const overlay of project.animatedText ?? []) {
+    const glyphs = textGraphemes(overlay.text);
+    const glyphTags = glyphs.map((letter, index) => {
+      const { entryStart, entryEnd, exitStart, exitEnd } = letterWindows(index, glyphs.length, overlay.duration);
+      // Each override span sets its own starting opacity so letters animate independently.
+      const tags = `{\\alpha&HFF&\\t(${entryStart},${entryEnd},\\alpha&H00&)\\t(${exitStart},${exitEnd},\\alpha&HFF&)}`;
+      return tags + escapeAssText(letter);
+    }).join('');
+    const x = Math.round(overlay.x * width);
+    const y = Math.round(overlay.y * height);
+    const fontSize = Math.round(overlay.fontSize * scale);
+    const color = assColor(overlay.color);
+    const tags = `{\\an5\\pos(${x},${y})\\fs${fontSize}\\1c${color}\\3c&H00121212&\\bord2\\shad1}`;
+    lines.push(`Dialogue: 7,${assTime(overlay.start)},${assTime(overlay.start + overlay.duration)},AnimatedText,,0,0,0,,${tags}${glyphTags}`);
   }
 
   if (project.watermark.enabled && project.watermark.type === 'text') {

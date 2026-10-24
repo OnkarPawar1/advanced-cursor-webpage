@@ -104,6 +104,16 @@ export const projectSchema = z.object({
     popIn: z.boolean().default(false),
     positionY: z.number().finite().min(5).max(95).default(84),
   }).default({ enabled: false, cues: [] }),
+  animatedText: z.array(z.object({
+    id: z.string().min(1).max(100),
+    text: z.string().trim().min(1).max(120),
+    start: seconds,
+    duration: z.number().finite().min(3).max(4),
+    x: z.number().finite().min(0).max(1),
+    y: z.number().finite().min(0).max(1),
+    fontSize: z.number().finite().min(16).max(64),
+    color: hexColor,
+  })).max(2000).default([]),
   watermark: z.discriminatedUnion('type', [
     z.object({ enabled: z.literal(false), type: z.literal('none') }),
     z.object({ enabled: z.literal(true), type: z.literal('text'), text: z.string().trim().min(1).max(200) }),
@@ -146,6 +156,12 @@ export const projectSchema = z.object({
   if (Math.abs(lastEnd - project.duration) > 0.25) {
     ctx.addIssue({ code: 'custom', path: ['duration'], message: 'Project duration must match the timeline duration' });
   }
+
+  project.animatedText.forEach((overlay, index) => {
+    if (overlay.start + overlay.duration > project.duration + 0.01) {
+      ctx.addIssue({ code: 'custom', path: ['animatedText', index], message: 'Animated text must finish before the end of the narration' });
+    }
+  });
 
   project.subtitles.cues.forEach((cue, index) => {
     if (cue.end <= cue.start) {
