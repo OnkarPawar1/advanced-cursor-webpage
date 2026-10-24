@@ -44,6 +44,52 @@ const AudioVisualMixer = () => {
   };
   const [, setPresenterCaptureRevision] = useState(0);
   
+  const saveTextTimeline = () => {
+    const data = { version: 1, type: 'animated-text-timeline', overlays: animatedTexts };
+    const objectUrl = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+    const anchor = document.createElement('a');
+    anchor.href = objectUrl;
+    anchor.download = 'animated-text-timeline.json';
+    anchor.click();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+  };
+
+  const loadTextTimeline = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    try {
+      if (file.size > 1_000_000) throw new Error('File is too large for text metadata.');
+      const data = JSON.parse(await file.text());
+      if (data?.version !== 1 || data.type !== 'animated-text-timeline' || !Array.isArray(data.overlays) || data.overlays.length > 2000) {
+        throw new Error('This is not a valid animated-text timeline file.');
+      }
+      const items = data.overlays.map((item, index) => {
+        const duration = Number(item.duration);
+        const start = Number(item.start);
+        const x = Number(item.x), y = Number(item.y);
+        const fontSize = Number(item.fontSize);
+        const text = String(item.text ?? '').replace(/[\\r\\n]/g, ' ').trim();
+        if (!text || text.length > 120 || !Number.isFinite(start) || start < 0 ||
+            !Number.isFinite(duration) || duration < 3 || duration > 4 ||
+            !Number.isFinite(x) || x < 0 || x > 1 || !Number.isFinite(y) || y < 0 || y > 1 ||
+            !Number.isFinite(fontSize) || fontSize < 16 || fontSize > 64 ||
+            !/^#[a-fA-F0-9]{6}$/.test(item.color)) {
+          throw new Error('Text cue ' + (index + 1) + ' contains invalid settings.');
+        }
+        return {
+          id: window.crypto?.randomUUID?.() || 'restored-' + index,
+          text, start, duration, x, y, fontSize, color: item.color,
+        };
+      });
+      setAnimatedTexts(items);
+      setSelectedTextId(items[0]?.id || null);
+      setPlacingAnimatedText(false);
+    } catch (error) {
+      window.alert(error.message || 'Could not load the text timeline.');
+    }
+  };
+
   // Settings
   const [useShuffle, setUseShuffle] = useState(false);
   const [imageDuration, setImageDuration] = useState(5);
@@ -3421,6 +3467,16 @@ The headline text drawn in the image must read exactly: "${headline}".`;
                 <p className="text-xs text-gray-400 mt-1">
                   Beautiful small text anywhere on your slideshow. Letters appear one by one, then dissolve after 3–4 seconds.
                 </p>
+              </div>
+              <div className="flex flex-wrap gap-2 items-center">
+                <button type="button" onClick={saveTextTimeline} disabled={!animatedTexts.length}
+                  className="px-3 py-2 text-xs rounded-lg bg-gray-700 hover:bg-gray-600 disabled:opacity-40">
+                  Save Text Timeline JSON
+                </button>
+                <label className="px-3 py-2 text-xs rounded-lg bg-gray-700 hover:bg-gray-600 cursor-pointer">
+                  Load Text Timeline
+                  <input type="file" accept="application/json,.json" onChange={loadTextTimeline} className="hidden" />
+                </label>
               </div>
               <button type="button" onClick={addAnimatedText}
                 disabled={!audioFile || audioDuration < 3 || productionBusy}
