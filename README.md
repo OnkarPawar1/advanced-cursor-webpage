@@ -222,7 +222,7 @@ The new **Animated Text Overlays** editor sits directly under the preview canvas
 4. Click **Place Anywhere on Preview**, then click the position you want, or use the horizontal/vertical sliders.
 5. Add as many cues as you need, then use **Production FFmpeg Export**. Your text overlay timings, positions and animations are burned into the exported MP4 using FFmpeg's ASS renderer.
 
-Text overlays are small editable metadata objects in browser memory, **not** browser-recorded video. Other media files can still consume browser memory during preview/PDF processing. A page refresh clears unsaved editing state; your source files stay on your Mac. Keep the editor open while working, and for critical long projects maintain your own backups of source files.
+Text overlays are small editable metadata objects in browser memory, **not** browser-recorded video. Use **Save Text Timeline JSON** to back up these cues outside Chrome and **Load Text Timeline** to restore them later (you will still need to reselect your audio and slide files). Other media files can still consume browser memory during preview/PDF processing. A page refresh clears unsaved editing state; your source files stay on your Mac. Keep the editor open while working, and for critical long projects maintain your own backups of source files.
 
 ---
 
