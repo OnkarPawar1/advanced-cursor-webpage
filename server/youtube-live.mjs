@@ -49,7 +49,14 @@ export function startYouTubeStream({ sourcePath, sourceJobId, streamKey, loop = 
   });
   let lastError = '';
   child.stderr.on('data', chunk => {
-    lastError = String(chunk).replaceAll(streamKey.trim(), '[REDACTED]').slice(-1000);
+    const detail = String(chunk);
+    // Keep FFmpeg diagnostic text out of APIs because it can contain the
+    // ingest URL, including the stream key, even across chunk boundaries.
+    lastError = /403|401|unauthorized|forbidden/i.test(detail)
+      ? 'YouTube rejected the stream. Check the stream key and broadcast settings.'
+      : /connection|network|timed out|resolve|dns/i.test(detail)
+        ? 'Could not connect to YouTube. Check your network and RTMPS access.'
+        : 'FFmpeg could not stream this file. Check its H.264/AAC encoding.';
   });
   child.on('error', err => {
     entry.status = 'failed';
