@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildLiveArgs, liveStatus, stopYouTubeStream } from '../server/youtube-live.mjs';
+import { OUTPUT_PRESETS } from '../server/schema.mjs';
+import { ffmpegInternals } from '../server/ffmpeg.mjs';
 
 const fixture = {
   sourcePath: '/tmp/finished.mp4',
@@ -33,4 +35,15 @@ test('keys, paths and loop input are validated before spawning a process', () =>
 test('inactive status exposes no credentials', () => {
   assert.deepEqual(liveStatus(), { status: 'idle' });
   assert.deepEqual(stopYouTubeStream(), { status: 'idle' });
+});
+
+test('live export preset encodes 1080p30 H.264 with a two-second GOP', () => {
+  assert.ok(OUTPUT_PRESETS.includes('youtube-live'));
+  const options = ffmpegInternals.encoderArguments({
+    output: { width: 1920, height: 1080, fps: 30, preset: 'youtube-live' }
+  }, { encoders: { h264Videotoolbox: true, libx264: true } });
+  assert.equal(options[options.indexOf('-g') + 1], '60');
+  assert.equal(options[options.indexOf('-c:v') + 1], 'h264_videotoolbox');
+  assert.equal(options[options.indexOf('-c:a') + 1], 'aac');
+  assert.equal(options[options.indexOf('-b:a') + 1], '192k');
 });
