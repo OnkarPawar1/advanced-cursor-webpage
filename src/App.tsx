@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
+import YouTubeLivePanel from './YouTubeLivePanel';
 import { Upload, Play, Pause, Download, Trash2, Film, Music, Image as ImageIcon, RefreshCcw, Shuffle, AlertCircle, VolumeX, Volume2, FileText, Loader2, Video, Clock, Layers, Dices, Sparkles, Type, Tv, ImagePlus, Move, MousePointerClick, SkipBack, SkipForward, LayoutGrid, CheckCircle2, Pencil, Highlighter, MousePointer2, Eraser, Zap, CircleDot, ZoomIn, ScanSearch, Copy, KeyRound, Wand2, Youtube, Repeat, Server, Cpu, Gauge, XCircle } from 'lucide-react';
 
 const configuredRenderApi = String(import.meta.env.VITE_RENDER_API_URL || '').replace(/\/$/, '');
@@ -3533,6 +3534,12 @@ The headline text drawn in the image must read exactly: "${headline}".`;
               </button>
             </div>
           </div>
+
+          <YouTubeLivePanel
+            apiBase={RENDER_API_BASE}
+            renderServiceReady={renderService.status === 'ready'}
+            renderJob={productionJob}
+          />
 
           {/* Manual Mode Filmstrip */}
           {isManualMode && activeAssets.length > 0 && (
